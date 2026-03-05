@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Health Snapshot - Personal Assistant (on EPIC)</title>
+
+    <!-- Tailwind CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Markdown Parser -->
+    <script src="https://cdn.jsdelivr.net/npm/markdown@0.5.0/lib/markdown.min.js"></script>
+
+</head>
+
+<body class="bg-gray-100 min-h-screen p-6">
+
+    <div class="max-w-3xl mx-auto bg-white p-6 rounded shadow">
+
+        <h1 class="text-2xl font-bold mb-4">Health Snapshot - Personal Assistant</h1>
+
+        <p class="mt-2 text-sm text-gray-600 leading-relaxed max-w-2xl">
+            Securely access your clinical records, monitor recent vital signs, and stay updated with your latest health
+            reports from EPIC Sandbox.
+        </p>
+
+        <!-- Sign In Button -->
+        <div id="login-section" class="mt-4">
+            <button id="login-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+                Sign in with Epic
+            </button>
+            <button id="logout-btn" class="hidden bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+                Sign out
+            </button>
+        </div>
+
+        <!-- Patient Content -->
+        <div id="app-content" class=" space-y-6 mt-6">
+
+            <div id="divAISummary" class=" mt-4">
+                <section id="ai-summary-section"
+                    class="my-6 px-4 py-6 bg-gradient-to-br from-indigo-50 via-white to-blue-50 border border-indigo-100 rounded-2xl shadow-sm relative overflow-hidden">
+                    <!-- Decorative Sparkle Icon (Signals AI) -->
+                    <div class="absolute top-4 right-4 text-indigo-400 opacity-20">
+                        <svg xmlns="http://www.w3.org" class="h-12 w-12" fill="none" viewBox="0 0 24 24"
+                            stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                    </div>
+
+                    <div class="relative z-10">
+                        <h2 class="flex items-center text-indigo-900 font-bold text-lg mb-2">
+                            <!-- AI Icon -->
+                            <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                            </svg>
+                            Health AI Insights
+                        </h2>
+
+                        <!-- The actual text container -->
+                        <!-- prose prose-indigo text-indigo-900 leading-relaxed text-sm md:text-base max-w-none -->
+                        <div id="summary-box"
+                            class="prose prose-indigo prose-sm leading-relaxed max-w-none text-indigo-900 marker:text-indigo-500">
+                            <!-- Default Loading State -->
+                            <div class="flex items-center space-x-2 animate-pulse">
+                                <div class="h-2 w-2 bg-indigo-400 rounded-full"></div>
+                                <p class="text-indigo-400 italic">Analyzing your latest lab results...</p>
+                            </div>
+                        </div>
+
+                        <!-- Disclaimer (Crucial for Medical Apps) -->
+                        <p
+                            class="mt-4 text-[10px] text-indigo-400 uppercase tracking-widest font-semibold border-t border-indigo-100 pt-3">
+                            AI-generated summary • Consult your doctor for medical decisions
+                        </p>
+                    </div>
+                </section>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+
+        document.addEventListener("DOMContentLoaded", function () {
+            console.log("DOM is fully loaded and parsed.");
+            // Your DOM-dependent code here
+            var aiResponse = `Here are the key points from the provided lab results in 4 bullet points: 
+* **High Blood Pressure**: **183 / 92 mm[Hg]**, indicating that the patient has **high blood pressure**.
+* Patient's **Hemoglobin A1C** level is **5.1**, which is within the normal range (typically <5.7%).
+* Patient's **Height** is **220 cm**, and their **Weight** is **75.5 kg**.
+* Patient's **Pulse** is **84 beats per minute**, and their **Temperature** is **37°C**.`;
+
+            aiResponse = aiResponse.replace(/\n\*/g, "\n\n*");
+
+
+            const summaryBox = document.getElementById("summary-box");
+
+            aiResponse = aiResponse.replace(/\n\*/g, "\n\n*");
+
+            // Render with Marked.js
+            var newhtmltext = window.markdown.toHTML(aiResponse);
+            console.log(newhtmltext);
+
+            newhtmltext = newhtmltext.replace(/<ul>/g, '<ul class="list-disc pl-6 space-y-3 mb-4">');
+            newhtmltext = newhtmltext.replace(/<li>/g, '<li class="text-indigo-900 font-medium">');
+
+            console.log('updated...');
+            console.log(newhtmltext);
+
+            summaryBox.innerHTML = newhtmltext;
+
+        });
+
+
+    </script>
+
+</body>
+
+</html>

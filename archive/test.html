@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+
+<body>
+    <h2>Local Browser Summarizer</h2>
+    <div id="status">Loading model (first time may take a minute)...</div>
+
+    <textarea id="longText" rows="5" cols="80">
+
+    </textarea>
+
+
+    <button id="btn" disabled>Summarize</button>
+    <p id="output"></p>
+
+    <script type="module">
+        // Load directly from a CDN
+        import { pipeline } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2';
+
+        const status = document.getElementById('status');
+        const btn = document.getElementById('btn');
+
+        // Create the pipeline
+        //const summarizer = await pipeline('summarization', 'Xenova/distilbart-cnn-6-6');
+        const generator = await pipeline('text-generation', 'onnx-community/SmolLM2-1.7B-Instruct');
+
+        status.innerText = "Ready!";
+        btn.disabled = false;
+
+        btn.onclick = async () => {
+
+            const prompt = document.getElementById('longText').value;
+            console.log(prompt);
+            //const output = await summarizer(text, { max_new_tokens: 1000 });
+            const output = await generator(prompt, {
+                max_new_tokens: 1000,
+                temperature: 0.2 // Lower temperature is safer for medical accuracy
+            });
+
+            document.getElementById('output').innerText = output[0].summary_text;
+
+        };
+    </script>
+</body>
+
+</html>

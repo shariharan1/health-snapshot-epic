@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+
+<body>
+    <h2>Medical Text Summarizer</h2>
+    <textarea id="medicalText" rows="6" cols="60" placeholder="Paste clinical notes here...">
+Summarize these medical results for a patient in simple terms:
+gender: female	dob: 1987-09-12	
+Medications:
+drospirenone-ethinyl estradiol 3-0.02 MG per tablet
+Lab Results:
+Hemoglobin A1C: 5.1
+Vital Signs:
+Blood Pressure: 183 / 92 mm[Hg]
+Height: 220 cm
+Pulse: 84 /min
+Temperature: 37 Cel
+Weight: 71.1 kg
+  </textarea><br><br>
+    <button onclick="getSmartMedicalInsights()">Summarize for Patient</button>
+    <p id="result" style="font-weight: bold; color: blue;"></p>
+
+    <script>
+        async function summarizeMedicalOld() {
+            const text = document.getElementById("medicalText").value;
+            const status = document.getElementById("result");
+            status.innerText = "Processing...";
+
+            try {
+                const response = await fetch(
+                    "https://api-inference.huggingface.co",
+                    {
+                        headers: {
+                            "Authorization": "Bearer YOUR_HF_TOKEN",
+                            "Content-Type": "application/json"
+                        },
+                        method: "POST",
+                        body: JSON.stringify({
+                            inputs: text,
+                            parameters: {
+                                max_length: 100,
+                                min_length: 30,
+                                do_sample: false // Keep it factual for medical info
+                            }
+                        }),
+                    }
+                );
+
+                const result = await response.json();
+
+                // If the model is still loading, it returns an 'estimated_time'
+                if (result.error && result.estimated_time) {
+                    status.innerText = `Model is loading. Try again in ${Math.round(result.estimated_time)} seconds.`;
+                } else {
+                    status.innerText = result[0].summary_text;
+                }
+            } catch (error) {
+                status.innerText = "Error: " + error.message;
+            }
+        }
+
+        async function summarizeMedical() {
+            // Use the new Router URL you found
+            const API_URL = "https://router.huggingface.co/hf-inference/models/Falconsai/medical_summarization";
+            const HF_TOKEN = "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";
+
+            const text = document.getElementById("medicalText").value;
+            const status = document.getElementById("result");
+            status.innerText = "Processing...";
+
+            try {
+                const response = await fetch(API_URL, {
+                    headers: {
+                        "Authorization": `Bearer ${HF_TOKEN}`,
+                        "Content-Type": "application/json"
+                    },
+                    method: "POST",
+                    body: JSON.stringify({
+                        inputs: text,
+                        parameters: {
+                            max_length: 1000,
+                            min_length: 300,
+                            temperature: 0.5,
+                            do_sample: false // Essential for factual medical summaries
+                        }
+                    }),
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    console.log("Summary:", result[0].summary_text);
+                    //return result[0].summary_text;
+                    status.innerText = result[0].summary_text;
+
+                } else {
+                    // Handle the "Model Loading" state (common in free tier)
+                    if (result.error && result.estimated_time) {
+                        console.warn(`Model is starting up. Try again in ${Math.round(result.estimated_time)}s`);
+                        status.innerText = `Model is starting up. Try again in ${Math.round(result.estimated_time)}s`;
+                    }
+                    throw new Error(result.error || "Failed to fetch summary");
+                }
+            } catch (error) {
+                console.error("Inference Error:", error.message);
+            }
+        }
+
+        async function getSmartMedicalInsights() {
+            const text = document.getElementById("medicalText").value;
+            const status = document.getElementById("result");
+
+            status.innerText = "Analyzing medical data... (this may take 20-30s if model is loading)";
+
+            const API_URL = "https://router.huggingface.co/v1/chat/completions";
+            const HF_TOKEN = "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"; // Replace with your actual token
+
+            try {
+                const response = await fetch(API_URL, {
+                    method: "POST",
+                    headers: {
+                        "Authorization": `Bearer ${HF_TOKEN}`,
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        model: "meta-llama/Llama-3.2-1B-Instruct", // Removed :novita for standard HF routing
+                        messages: [
+                            {
+                                role: "user",
+                                content: `Summarize these medical results for a patient in simple terms. Do not just repeat the parameters—provide insights on what the numbers mean and highlight any concerns. Data:\n\n${text}`
+                            }
+                        ],
+                        max_tokens: 500,
+                        stream: false
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // The response follows the OpenAI format: choices[0].message.content
+                    const aiResponse = data.choices[0].message.content;
+                    status.innerText = aiResponse;
+                } else {
+                    // Handle common HF errors (like Model Loading)
+                    const errorMsg = data.error?.message || "Unknown error occurred";
+                    status.innerText = "Error: " + errorMsg;
+                    console.error("API Error Details:", data);
+                }
+            } catch (error) {
+                status.innerText = "Connection Error: " + error.message;
+                console.error("Fetch Error:", error);
+            }
+        }
+
+
+    </script>
+</body>
+
+</html>

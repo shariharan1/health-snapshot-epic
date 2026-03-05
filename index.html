@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Health Snapshot - Personal Assistant (on EPIC)</title>
+
+    <!-- Tailwind CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Markdown Parser -->
+    <script src="https://cdn.jsdelivr.net/npm/markdown@0.5.0/lib/markdown.min.js"></script>
+
+    <!-- SMART on FHIR client -->
+    <script src="https://unpkg.com/fhirclient/build/fhir-client.js"></script>
+</head>
+
+<body class="bg-gray-100 min-h-screen p-6">
+
+    <div class="max-w-3xl mx-auto bg-white p-6 rounded shadow">
+
+        <h1 class="text-2xl font-bold mb-4">Health Snapshot - Personal Assistant</h1>
+
+        <p class="mt-2 text-sm text-gray-600 leading-relaxed max-w-2xl">
+            Securely access your clinical records, monitor recent vital signs, and stay updated with your latest health
+            reports from EPIC Sandbox.
+        </p>
+
+        <div id="login_hint" class="hidden mt-8 p-4 bg-blue-50 border-2 border-dashed border-blue-200 rounded-xl">
+            <h3 class="text-sm font-semibold text-blue-800 tracking-wider mb-3">
+                You may use these user id for testing. password will be <b>epicepic1</b>
+            </h3>
+            <ul>
+                <li>fhircamila</li>
+                <li>fhirderrick</li>
+                <li>fhirdesiree</li>
+            </ul>
+        </div>
+
+        <!-- Sign In Button -->
+        <div id="login-section" class="mt-4">
+            <button id="login-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+                Sign in with Epic
+            </button>
+            <button id="logout-btn" class="hidden bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+                Sign out
+            </button>
+        </div>
+
+        <!-- Patient Content -->
+        <div id="app-content" class="hidden space-y-6 mt-6">
+
+            <div id="patient-info">
+            </div>
+
+            <div id="divAISummary" class="hidden mt-4">
+                <section id="ai-summary-section"
+                    class="my-6 px-4 py-6 bg-gradient-to-br from-indigo-50 via-white to-blue-50 border border-indigo-100 rounded-2xl shadow-sm relative overflow-hidden">
+                    <!-- Decorative Sparkle Icon (Signals AI) -->
+                    <div class="absolute top-4 right-4 text-indigo-400 opacity-20">
+                        <svg xmlns="http://www.w3.org" class="h-12 w-12" fill="none" viewBox="0 0 24 24"
+                            stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                    </div>
+
+                    <div class="relative z-10">
+                        <h2 class="flex items-center text-indigo-900 font-bold text-lg mb-2">
+                            <!-- AI Icon -->
+                            <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                            </svg>
+                            Health AI Insights
+                        </h2>
+
+                        <!-- The actual text container -->
+                        <div id="summary-box"
+                            class="prose prose-indigo text-indigo-900 leading-relaxed text-sm md:text-base max-w-none">
+                            <!-- Default Loading State -->
+                            <div class="flex items-center space-x-2 animate-pulse">
+                                <div class="h-2 w-2 bg-indigo-400 rounded-full"></div>
+                                <p class="text-indigo-400 italic">Analyzing your latest lab results...</p>
+                            </div>
+                        </div>
+
+                        <!-- Disclaimer (Crucial for Medical Apps) -->
+                        <p
+                            class="mt-4 text-[10px] text-indigo-400 uppercase tracking-widest font-semibold border-t border-indigo-100 pt-3">
+                            AI-generated summary • Consult your doctor for medical decisions
+                        </p>
+                    </div>
+                </section>
+            </div>
+
+            <div id="divMedications">
+                <h2 class="font-semibold text-lg">Medications</h2>
+
+                <div id="medicationsSpinner" class="flex items-center gap-2 text-sm text-gray-500 mt-2">
+                    <div class="animate-spin h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full"></div>
+                    <span>Loading Medications...</span>
+                </div>
+
+                <ul id="med-list" class="list-disc pl-5"></ul>
+
+                <div id="medrequest-outcomes" class="hidden">
+                    <details class="group">
+                        <summary class="ml-6 pl4 font-normal text-amber-800 cursor-pointer list-none flex items-center">
+                            Request Outcomes/Issues
+                            <span class="ml-2 transition-transform group-open:rotate-180">▼</span>
+                        </summary>
+                        <!-- <h4 class="font-semibold text-base">Request Outcomes/Issues</h4> -->
+                        <ul id="med-issues-list" class="ml-6 list-disc pl-5 text-sm text-gray-600 mt-2"></ul>
+                    </details>
+                </div>
+            </div>
+
+            <div id="divLabRequest">
+                <h2 class="font-semibold text-lg">Lab Results</h2>
+
+                <div id="labRequestsSpinner" class="flex items-center gap-2 text-sm text-gray-500 mt-2">
+                    <div class="animate-spin h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full"></div>
+                    <span>Loading Laboratory Requests/Results...</span>
+                </div>
+
+                <ul id="lab-list" class="list-disc pl-5"></ul>
+
+                <div id="labrequest-outcomes" class="hidden">
+                    <details class="group">
+                        <summary class="ml-6 pl4 font-normal text-amber-800 cursor-pointer list-none flex items-center">
+                            Request Outcomes/Issues <span
+                                class="ml-2 transition-transform group-open:rotate-180">▼</span>
+                        </summary>
+                        <!-- <h4 class="font-semibold text-base">Request Outcomes/Issues</h4> -->
+                        <ul id="lab-issues-list" class="ml-6 list-disc pl-5 text-sm text-gray-600 mt-2"></ul>
+                    </details>
+                </div>
+
+            </div>
+
+            <div id="divVitals">
+                <h2 class="font-semibold text-lg">Vital Signs</h2>
+
+                <div id="vitalsSpinner" class="flex items-center gap-2 text-sm text-gray-500 mt-2">
+                    <div class="animate-spin h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full"></div>
+                    <span>Loading Vitals...</span>
+                </div>
+
+                <ul id="vitals-list" class="list-disc pl-5"></ul>
+
+                <details id="recent-vitals" class="group hidden mt-4">
+                    <summary class="ml-6 pl-4 font-normal cursor-pointer list-none flex items-center">
+                        Last 5 Reports for all Vitals <span
+                            class="ml-2 transition-transform group-open:rotate-180">▼</span>
+                    </summary>
+                    <!-- <h4 class="font-semibold text-base">Request Outcomes/Issues</h4> -->
+                    <div id="vitals-table" class="mt-2"></div>
+                </details>
+
+                <div id="vitalsrequest-outcomes" class="hidden mt-4">
+                    <details class="group">
+                        <summary
+                            class="ml-6 pl-4 font-normal text-amber-800 cursor-pointer list-none flex items-center">
+                            Request Outcomes/Issues <span
+                                class="ml-2 transition-transform group-open:rotate-180">▼</span>
+                        </summary>
+                        <!-- <h4 class="font-semibold text-base">Request Outcomes/Issues</h4> -->
+                        <ul id="vitals-issues-list" class="ml-6 list-disc pl-5 text-sm text-gray-600 mt-2"></ul>
+                    </details>
+                </div>
+
+            </div>
+
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
