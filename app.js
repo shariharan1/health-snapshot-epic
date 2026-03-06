@@ -13,7 +13,8 @@ const REDIRECT_URI = "http://localhost:3010";
 const API_URL = "https://router.huggingface.co/v1/chat/completions";
 const MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct";
 
-const HF_TOKEN = "hf_xxxxxxxxxxxxxxxxxx"; // Replace with your actual token
+//const HF_TOKEN = "hf_xxxxxxxxxxxxxxxxxx"; // Replace with your actual token
+const HF_TOKEN = "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";
 
 
 var client_session = null;
