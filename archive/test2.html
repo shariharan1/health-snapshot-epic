@@ -62,7 +62,7 @@ Weight: 71.1 kg
         async function summarizeMedical() {
             // Use the new Router URL you found
             const API_URL = "https://router.huggingface.co/hf-inference/models/Falconsai/medical_summarization";
-            const HF_TOKEN = "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";
+            const HF_TOKEN = "hf_xxxxxxxxxxxxxxxxxx"; // replace ur token here
 
             const text = document.getElementById("medicalText").value;
             const status = document.getElementById("result");
@@ -113,7 +113,7 @@ Weight: 71.1 kg
             status.innerText = "Analyzing medical data... (this may take 20-30s if model is loading)";
 
             const API_URL = "https://router.huggingface.co/v1/chat/completions";
-            const HF_TOKEN = "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"; // Replace with your actual token
+            const HF_TOKEN = "hf_xxxxxxxxxxxxxxxxxxx"; // Replace with your actual token
 
             try {
                 const response = await fetch(API_URL, {
