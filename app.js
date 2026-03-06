@@ -9,6 +9,13 @@ const FHIR_BASE_URL = "https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4
 const REDIRECT_URI = "http://localhost:3010";
 //const REDIRECT_URI = "https://localhost:3443";
 
+// HF Url for accessing the llama instruct model
+const API_URL = "https://router.huggingface.co/v1/chat/completions";
+const MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct";
+
+const HF_TOKEN = "hf_xxxxxxxxxxxxxxxxxx"; // Replace with your actual token
+
+
 var client_session = null;
 var session_timer_id = null;
 // ==========================
@@ -760,9 +767,6 @@ async function getSmartMedicalInsights(patientInfo) {
             <p class="text-indigo-400 italic font-medium">Analyzing your latest lab results...</p>
         </div>`;
 
-    const API_URL = "https://router.huggingface.co/v1/chat/completions";
-    const HF_TOKEN = "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"; // Replace with your actual token
-
     try {
         const response = await fetch(API_URL, {
             method: "POST",
@@ -771,7 +775,7 @@ async function getSmartMedicalInsights(patientInfo) {
                 "Content-Type": "application/json"
             },
             body: JSON.stringify({
-                model: "meta-llama/Llama-3.2-1B-Instruct",
+                model: `${MODEL_NAME}`,
                 messages: [
                     {
                         role: "system",
