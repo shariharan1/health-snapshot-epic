@@ -24,29 +24,68 @@
 
         <p class="mt-2 text-sm text-gray-600 leading-relaxed max-w-2xl">
             Securely access your clinical records, monitor recent vital signs, and stay updated with your latest health
-            reports from EPIC Sandbox.
+            reports from your EHR provider.
         </p>
 
-        <div id="login_hint" class="hidden mt-8 p-4 bg-blue-50 border-2 border-dashed border-blue-200 rounded-xl">
-            <h3 class="text-sm font-semibold text-blue-800 tracking-wider mb-3">
-                You may use these user id for testing. password will be <b>epicepic1</b>
-            </h3>
-            <ul>
-                <li>fhircamila</li>
-                <li>fhirderrick</li>
-                <li>fhirdesiree</li>
-            </ul>
-        </div>
+        <p id="curr_sandbox" class="hidden mt-2 text-md text-gray-600 leading-relaxed max-w-2xl">
+            Current Sandbox:
+        </p>
 
         <!-- Sign In Button -->
-        <div id="login-section" class="mt-4">
+        <div id="login-section" class="mt-4 hidden">
+            <div id="endpoint-selection" class="mb-4">
+                <label for="fhir-endpoint" class="block text-sm font-medium text-gray-700 mb-1">Select FHIR
+                    Sandbox:</label>
+                <select id="fhir-endpoint"
+                    class="block w-full sm:max-w-xs border border-gray-300 rounded-md p-2 bg-white focus:ring-blue-500 focus:border-blue-500">
+                    <!-- Options populated via JS -->
+                </select>
+                <p id="endpoint-desc" class="mt-2 text-sm text-gray-500"></p>
+            </div>
+
             <button id="login-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
                 Sign in with Epic
             </button>
-            <button id="logout-btn" class="hidden bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+
+            <div id="login_hint_epic"
+                class="hidden mt-8 p-4 bg-blue-50 border-2 border-dashed border-blue-200 rounded-xl">
+                <h3 class="text-sm font-semibold text-blue-800 tracking-wider mb-3">
+                    You may use these user ids for testing. password will be <b>epicepic1</b>
+                </h3>
+                <ul>
+                    <li>fhircamila</li>
+                    <li>fhirderrick</li>
+                    <li>fhirdesiree</li>
+                </ul>
+            </div>
+
+            <div id="login_hint_cerner"
+                class="hidden mt-8 p-4 bg-blue-50 border-2 border-dashed border-blue-200 rounded-xl">
+                <h3 class="text-sm font-semibold text-blue-800 tracking-wider mb-3">
+                    You may use these user ids for testing. password will be <b>Cerner01</b>
+                </h3>
+                <ul>
+                    <li>nancysmart (2 patients)</li>
+                    <li>joesmart1</li>
+                    <li>wilmasmart</li>
+                    <li>valeriesmart1 (2 patients)</li>
+                    <li>fredricksmart</li>
+                    <li>timmysmart</li>
+                    <li>haileysmart</li>
+                    <li>timApeters</li>
+                    <li>alicegilbert1</li>
+                    <li>ktriplett1</li>
+                </ul>
+            </div>
+
+        </div>
+
+        <div id="logout-section" class="mt-4 hidden">
+            <button id="logout-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
                 Sign out
             </button>
         </div>
+
 
         <!-- Patient Content -->
         <div id="app-content" class="hidden space-y-6 mt-6">

@@ -1,20 +1,21 @@
 // ==========================
 // CONFIGURATION
 // ==========================
-const CLIENT_ID = "56feba67-549f-4364-93b2-1cd0ab387b5b";
-
-// Epic Sandbox example base URL
-const FHIR_BASE_URL = "https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4";
-
-const REDIRECT_URI = "http://localhost:3010";
-//const REDIRECT_URI = "https://localhost:3443";
-
-// HF Url for accessing the llama instruct model
-const API_URL = "https://router.huggingface.co/v1/chat/completions";
-const MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct";
-
-//const HF_TOKEN = "hf_xxxxxxxxxxxxxxxxxx"; // Replace with your actual token
-const HF_TOKEN = "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";
+let _config = null;
+async function getConfig() {
+    if (_config) return _config;
+    try {
+        const response = await fetch('config.json');
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status} when fetching config`);
+        }
+        _config = await response.json();
+    } catch (e) {
+        console.error("Failed to load config.json", e);
+        _config = {};
+    }
+    return _config;
+}
 
 
 var client_session = null;
@@ -53,6 +54,44 @@ function withLoader(spinnerId, promise) {
     });
 }
 
+function resetToLogin() {
+    debug("Resetting to login state...");
+    client_session = null;
+
+    // Clear underlying FHIR client session storage
+    sessionStorage.clear();
+    localStorage.removeItem('fhir_token_expires');
+
+    // Remove OAuth redirect params (code, state) from URL to prevent automatic re-login on refresh
+    if (window.history && window.history.replaceState) {
+        const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+    }
+
+    const currSandbox = document.getElementById("curr_sandbox");
+    if (currSandbox) currSandbox.classList.add("hidden");
+
+    const logoutSection = document.getElementById("logout-section");
+    if (logoutSection) logoutSection.classList.add("hidden");
+
+    const appContent = document.getElementById("app-content");
+    if (appContent) appContent.classList.add("hidden");
+
+    const loginSection = document.getElementById("login-section");
+    if (loginSection) loginSection.classList.remove("hidden");
+
+    const fhirEndpoint = document.getElementById("fhir-endpoint");
+    if (fhirEndpoint) {
+        const changeEvent = new Event('change', { bubbles: true });
+        fhirEndpoint.dispatchEvent(changeEvent);
+    }
+
+    if (session_timer_id !== null) {
+        clearTimeout(session_timer_id);
+        session_timer_id = null;
+    }
+}
+
 FHIR.oauth2.ready()
     .then(async (client) => {
         if (isRedirect) {
@@ -62,10 +101,10 @@ FHIR.oauth2.ready()
             initApp(client);
         } else {
             try {
-
                 const expiresAt = localStorage.getItem('fhir_token_expires');
 
-                if (expiresAt && Date.now() > Date(expiresAt)) {
+                // Fix: parseInt(expiresAt) correctly converts the timestamp string back to a comparable number
+                if (expiresAt && Date.now() > parseInt(expiresAt)) {
                     // Force a refresh check before doing anything else
                     // This ensures the client object is active and valid
                     await client.refresh();
@@ -74,52 +113,111 @@ FHIR.oauth2.ready()
                 // If we reach here, the token is valid or was successfully refreshed
                 initApp(client);
             } catch (error) {
-                console.warn("Refresh failed, session expired. Re-authorizing...", error);
-                // Optional: Auto-trigger re-login or show login button
-                document.getElementById("logout-btn").click();
+                console.warn("Token expired and refresh failed. Falling back to login...", error);
+                resetToLogin();
             }
         }
     })
     .catch(error => {
-        console.error("OAuth Ready Error:", error);
-        //document.getElementById("login-section").classList.remove("hidden");
-        document.getElementById("logout-btn").click();
+        console.info("No active FHIR session found or OAuth Ready Error:", error);
+        resetToLogin();
     });
 
 
 // ==========================
 // LOGIN HANDLER
 // ==========================
-document.getElementById("login-btn").addEventListener("click", () => {
+async function populateEndpoints() {
+    const config = await getConfig();
+    const select = document.getElementById("fhir-endpoint");
+    const desc = document.getElementById("endpoint-desc");
+    const loginBtn = document.getElementById("login-btn");
+
+    if (!select) return;
+
+    select.innerHTML = "";
+
+    for (const [key, endpoint] of Object.entries(config.fhir_endpoints)) {
+        const option = document.createElement("option");
+        option.value = key;
+        option.textContent = endpoint.name || key;
+        select.appendChild(option);
+    }
+
+    select.addEventListener("change", (e) => {
+        const selectedKey = e.target.value;
+        const endpoint = config.fhir_endpoints[selectedKey];
+        if (endpoint) {
+            desc.textContent = endpoint.description || "";
+            loginBtn.textContent = `Sign in with ${endpoint.name || selectedKey}`;
+        }
+    });
+
+    const savedEndpoint = localStorage.getItem('selected_fhir_endpoint');
+    if (savedEndpoint && config.fhir_endpoints[savedEndpoint]) {
+        select.value = savedEndpoint;
+    }
+
+    // trigger change to set initial description and hints ONLY if not redirecting
+    if (!isRedirect && select.options.length > 0) {
+        select.dispatchEvent(new Event("change"));
+    }
+}
+
+populateEndpoints();
+
+function hideLoginHints() {
+    document.querySelectorAll('[id^="login_hint_"]').forEach(el => {
+        el.classList.add('hidden');
+    });
+}
+
+document.getElementById('fhir-endpoint').addEventListener('change', function () {
+    hideLoginHints();
+    if (this.value === 'epic') {
+        document.getElementById('login_hint_epic').classList.remove('hidden');
+    } else if (this.value === 'cerner') {
+        document.getElementById('login_hint_cerner').classList.remove('hidden');
+    }
+});
+
+
+document.getElementById("login-btn").addEventListener("click", async () => {
 
     debug("login clicked...");
     debug(window.location.href);
 
+    const config = await getConfig();
+    const selectedKey = document.getElementById("fhir-endpoint").value;
+    const endpointConfig = config.fhir_endpoints[selectedKey];
+
+    // Save to local storage before redirecting!
+    localStorage.setItem('selected_fhir_endpoint', selectedKey);
+
+    if (!endpointConfig) {
+        alert("Please select a valid endpoint.");
+        return;
+    }
+
+    console.log("Redirect URI: " + config.redirect_uri);
+    console.log("Client ID   : " + endpointConfig.client_id);
+    console.log("Scope       : " + endpointConfig.patient_scopes);
+    console.log("Base URL    : " + endpointConfig.fhir_base_url);
+
     FHIR.oauth2.authorize({
-        clientId: CLIENT_ID,
-        scope: "launch/patient openid profile patient/Patient.read patient/MedicationRequest.read patient/Observation.read",
-        redirectUri: REDIRECT_URI,
-        iss: FHIR_BASE_URL
+        clientId: endpointConfig.client_id,
+        scope: endpointConfig.patient_scopes,
+        redirectUri: config.redirect_uri,
+        iss: endpointConfig.fhir_base_url
     });
+
+    //document.getElementById("endpoint-selection").classList.add("hidden");
 
 });
 
 document.getElementById("logout-btn").addEventListener("click", () => {
-
     debug("logout clicked...");
-    client_session = null;
-
-    document.getElementById("logout-btn").classList.add("hidden");
-    document.getElementById("app-content").classList.add("hidden");
-
-    document.getElementById("login-btn").classList.remove("hidden");
-    document.getElementById("login_hint").classList.remove("hidden");
-
-    if (session_timer_id !== null) {
-        clearTimeout(session_timer_id);
-        session_timer_id = null;
-    }
-
+    resetToLogin();
 });
 
 const global_dict = {};
@@ -134,12 +232,22 @@ async function initApp(client) {
 
     client_session = client;
 
+    const config = await getConfig();
+    const savedEndpointKey = localStorage.getItem('selected_fhir_endpoint') || "";
+    const endpointConfig = config.fhir_endpoints[savedEndpointKey];
+    const endpointName = endpointConfig ? endpointConfig.name : savedEndpointKey;
+
+    document.getElementById("curr_sandbox").classList.remove("hidden");
+    document.getElementById("curr_sandbox").textContent = "Current Sandbox: [" + endpointName + "] [" + client.fhirBaseUrl + "]";
+
     // Hide login
-    document.getElementById("login-btn").classList.add("hidden");
-    document.getElementById("logout-btn").classList.remove("hidden");
+    // document.getElementById("endpoint-selection").classList.add("hidden");
+    // document.getElementById("login-btn").classList.add("hidden");
+    document.getElementById("logout-section").classList.remove("hidden");
+    document.getElementById("login-section").classList.add("hidden");
 
     document.getElementById("recent-vitals").classList.add("hidden");
-    document.getElementById("login_hint").classList.add("hidden");
+    hideLoginHints();
 
     const patientId = client.patient.id;
 
@@ -148,13 +256,11 @@ async function initApp(client) {
     const expiresAt = Date.now() + (tokenResponse.expires_in * 1000);
 
     localStorage.setItem('fhir_token_expires', expiresAt);
-
-    debug("About to print expiresAt");
-    debug((new Date(expiresAt)).toLocaleString());
+    debug("Current Time: " + (new Date()).toLocaleString() + " | Token expiry time: " + (new Date(expiresAt)).toLocaleString() + " | Token expires in: " + tokenResponse.expires_in + " seconds");
 
     debug("setting session timer...");
     session_timer_id = setTimeout(() => {
-        debug('Token expired!');
+        debug('Current time: ' + (new Date()).toLocaleString() + ' | Token expired!');
         document.getElementById("logout-btn").click();
     }, tokenResponse.expires_in * 1000);
 
@@ -170,11 +276,72 @@ async function initApp(client) {
 
     debug("All data loaded...");
 
-    await getSmartMedicalInsights(global_dict);
-
+    if (config.ai_integrations.enabled) {
+        await getSmartMedicalInsights(global_dict);
+    }
 
     debug("exiting initApp!");
 }
+
+function getPatientMRN(resPatient) {
+
+    const mrnIdentifier = resPatient.identifier?.find(id =>
+        id.type?.coding?.some(coding => coding.code === 'MR')
+    );
+
+    const mrn = mrnIdentifier ? mrnIdentifier.value : "-";
+
+    console.log("Patient MRN:", mrn);
+
+    return mrn;
+
+}
+
+function getPatientIDs(resPatient) {
+    const otherIdentifiers = resPatient.identifier?.filter(id => {
+
+        // 1. Check if the type code is NOT 'MR'
+        const isNotMRNCode = !id.type?.coding?.some(c => c.code === 'MR');
+
+        // 2. (Optional) Check if the system URI doesn't contain 'mrn' 
+        // useful for systems that don't provide a 'type' object
+        const isNotMRNSystem = !id.system?.toLowerCase().includes('mrn');
+
+        return isNotMRNCode && isNotMRNSystem;
+    }) || [];
+
+    console.log("Other IDs found:", otherIdentifiers);
+
+    return otherIdentifiers;
+}
+
+function getPatientIDsDisplay(resPatient) {
+
+    const otherIdentifiers = getPatientIDs(resPatient);
+
+    if (!otherIdentifiers || otherIdentifiers.length === 0) {
+        return "<div class='text-sm text-gray-500 italic p-4'>No other identifiers found.</div>";
+    }
+
+    let html = "<div class='grid grid-cols-4 gap-x-4 gap-y-2 bg-white p-4 rounded border border-gray-200'>";
+
+    otherIdentifiers.forEach(id => {
+        const typeDisplay = id.type?.coding?.[0]?.display || id.type?.text || id.system || "Other ID";
+        html += `
+            <div class="font-medium text-sm text-gray-600 flex items-center justify-end text-right">
+                ${typeDisplay}:
+            </div>
+            <div class="text-sm text-gray-800 flex items-center break-all">
+                ${id.value}
+            </div>
+        `;
+    });
+
+    html += "</div>";
+
+    return html;
+}
+
 
 async function loadPatient(client, patientId) {
 
@@ -198,7 +365,7 @@ async function loadPatient(client, patientId) {
                         <th>Name</th>
                         <th>Gender</th>
                         <th>DOB</th>
-                        <th>ID</th>
+                        <th>MRN</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -206,16 +373,31 @@ async function loadPatient(client, patientId) {
                         <td class="hover:bg-gray-100 text-center">${fullName}</td>
                         <td class="hover:bg-gray-100 text-center">${patient.gender}</td>
                         <td class="hover:bg-gray-100 text-center">${patient.birthDate}</td>
-                        <td class="hover:bg-gray-100 text-center">${patient.id}</td>
+                        <td class="hover:bg-gray-100 text-center">${getPatientMRN(patient)}</td>
                     </tr>
                 </tbody>
             </table>
+            <details class="group mt-4">
+                <summary class="ml-6 pl-4 font-normal cursor-pointer list-none flex items-center">
+                    Other Identifiers <span class="ml-2 transition-transform group-open:rotate-180">▼</span>
+                </summary>
+                <div id="other-ids" class="mt-2 text-gray-800 px-6">
+                    ${getPatientIDsDisplay(patient)}
+                </div>
+            </details>
         </div>
       `;
 
             document.getElementById("patient-info").innerHTML = html;
 
             debug("loadPatient finshed!");
+        })
+        .catch(error => {
+            console.error("Error loading Patient:", error);
+            document.getElementById("patient-info").innerHTML = `
+                <div class="p-4 bg-red-50 border border-red-200 rounded text-red-600 text-sm font-semibold">
+                    Failed to load patient information: ${error.message || "Unknown error occurred"}
+                </div>`;
         });
 
     debug("exiting loadPatient!");
@@ -264,19 +446,94 @@ function displayOutcomes(parentSection, targetList, targetArr) {
 
 }
 
-function createVitalsTable(dataArray) {
+function extractObservationDetails(resource) {
+    // 1. Get the Observation Name
+    const obsName = resource.code?.text
+        || resource.code?.coding?.[0]?.display
+        || "Unknown Observation";
+
+    // 2. Get the Date (Falling back to edge-case fields if effectiveDateTime is absent)
+    const obsDate = resource.effectiveDateTime
+        || resource.effectivePeriod?.start
+        || resource.issued
+        || new Date().toISOString();
+
+    let value = "-";
+    let uom = "";
+
+    // 3. Try to extract a top-level value[x]
+    if (resource.valueQuantity) {
+        value = resource.valueQuantity.value ?? "-";
+        uom = resource.valueQuantity.unit || resource.valueQuantity.code || "";
+    }
+    else if (resource.valueCodeableConcept) {
+        value = resource.valueCodeableConcept.text
+            || resource.valueCodeableConcept.coding?.[0]?.display
+            || "-";
+    }
+    else if (resource.valueString !== undefined) {
+        value = resource.valueString;
+    }
+
+    // 4. If no top-level value exists, look for components (like Blood Pressure)
+    else if (resource.component && resource.component.length > 0) {
+
+        // Let's specifically handle Blood Pressure formatting (Sys / Dia)
+        const isBP = obsName.toLowerCase().includes("blood pressure");
+
+        if (isBP) {
+            let sys = "-", sysUom = "";
+            let dia = "-", diaUom = "";
+
+            resource.component.forEach(comp => {
+                const compName = comp.code?.text || comp.code?.coding?.[0]?.display || "";
+
+                if (compName.toLowerCase().includes("systolic")) {
+                    sys = comp.valueQuantity?.value ?? "-";
+                    sysUom = comp.valueQuantity?.unit ?? "";
+                } else if (compName.toLowerCase().includes("diastolic")) {
+                    dia = comp.valueQuantity?.value ?? "-";
+                    diaUom = comp.valueQuantity?.unit ?? "";
+                }
+            });
+
+            value = `${sys} / ${dia}`;
+            uom = sysUom || diaUom; // They usually share the same UoM (mm[Hg])
+        }
+        else {
+            // Generic fallback for any other multi-component observations
+            // Formats like: "Part A: 5 mg | Part B: 10 mg"
+            const compStrings = resource.component.map(comp => {
+                const cName = comp.code?.text || comp.code?.coding?.[0]?.display || "Component";
+                let cVal = comp.valueQuantity?.value || comp.valueCodeableConcept?.text || comp.valueString || "-";
+                let cUom = comp.valueQuantity?.unit || "";
+                return `${cName}: ${cVal} ${cUom}`.trim();
+            });
+            value = compStrings.join(" | ");
+        }
+    }
+
+    return {
+        name: obsName,
+        value: String(value).trim(),
+        uom: uom,
+        obsDate: obsDate
+    };
+}
+
+function createObservationTable(dataArray) {
     // 1. Create the Table and apply Tailwind styles
     const table = document.createElement('table');
     table.className = "min-w-full divide-y divide-gray-200 shadow-sm rounded-lg overflow-hidden";
 
     // 2. Create Header
     const thead = document.createElement('thead');
-    thead.className = "bg-gray-50";
+    thead.className = "bg-gray-50 cursor-pointer";
     thead.innerHTML = `
         <tr>
-            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Value</th>
+            <th data-sort="date" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hover:bg-gray-200 select-none">Date ↕</th>
+            <th data-sort="name" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hover:bg-gray-200 select-none">Name ↕</th>
+            <th data-sort="value" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hover:bg-gray-200 select-none">Value ↕</th>
         </tr>
     `;
     table.appendChild(thead);
@@ -284,52 +541,96 @@ function createVitalsTable(dataArray) {
     // 3. Create Body
     const tbody = document.createElement('tbody');
     tbody.className = "bg-white divide-y divide-gray-200";
+    table.appendChild(tbody);
 
-    dataArray.forEach(item => {
-        const tr = document.createElement('tr');
-        tr.className = "hover:bg-gray-50 transition-colors"; // Tailwind hover effect
+    function renderBody(data) {
+        tbody.innerHTML = '';
+        data.forEach(item => {
+            const tr = document.createElement('tr');
+            tr.className = "hover:bg-gray-50 transition-colors";
 
-        // Use a helper or manual creation for cells
-        tr.innerHTML = `
-            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${new Date(item.obsDate).toLocaleString()}</td>
-            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${item.name}</td>
-            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.value} ${item.uom}</td>
-        `;
-        tbody.appendChild(tr);
+            const obsDateRaw = item.obsDate;
+            const formattedDate = obsDateRaw ? new Date(obsDateRaw).toLocaleString() : "Unknown";
+
+            tr.innerHTML = `
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formattedDate}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${item.name || "Unknown"}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.value || ""} ${item.uom || ""}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    renderBody(dataArray);
+
+    let sortConfig = { key: null, direction: 'asc' };
+
+    // 4. Sorting logic
+    thead.addEventListener('click', (e) => {
+        const th = e.target.closest('th');
+        if (!th) return;
+
+        const key = th.dataset.sort;
+        if (!key) return;
+
+        if (sortConfig.key === key) {
+            sortConfig.direction = sortConfig.direction === 'asc' ? 'desc' : 'asc';
+        } else {
+            sortConfig.key = key;
+            sortConfig.direction = 'asc';
+        }
+
+        const sortedData = [...dataArray].sort((a, b) => {
+            let valA, valB;
+            if (key === 'date') {
+                valA = a.obsDate ? new Date(a.obsDate).getTime() : 0;
+                valB = b.obsDate ? new Date(b.obsDate).getTime() : 0;
+            } else if (key === 'name') {
+                valA = (a.name || "").toLowerCase();
+                valB = (b.name || "").toLowerCase();
+            } else if (key === 'value') {
+                const numA = parseFloat(a.value);
+                const numB = parseFloat(b.value);
+                if (!isNaN(numA) && !isNaN(numB)) {
+                    valA = numA;
+                    valB = numB;
+                } else {
+                    valA = (a.value + "").toLowerCase();
+                    valB = (b.value + "").toLowerCase();
+                }
+            }
+
+            if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+            if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+            return 0;
+        });
+
+        renderBody(sortedData);
     });
 
-    table.appendChild(tbody);
     return table;
 }
 
-function filterTopNVitals(dataArray, topN) {
+function filterTopNObservations(dataArray, topN) {
+    const sortedByDate = [...dataArray].sort((a, b) => {
+        const dateA = a.obsDate ? new Date(a.obsDate).getTime() : 0;
+        const dateB = b.obsDate ? new Date(b.obsDate).getTime() : 0;
+        return dateB - dateA;
+    });
 
-    // 1. Sort by Date descending (newest first)
-    // We do this first so the "top 5" are automatically the most recent
-    const sortedByDate = [...dataArray].sort((a, b) =>
-        new Date(b.obsDate) - new Date(a.obsDate)
-    );
-
-    const counts = {}; // To track how many we've added per name
+    const counts = {};
     const result = [];
 
-    // 2. Loop through and pick top 5 per name
     for (const item of sortedByDate) {
-        const name = item.name;
-
-        // Initialize count if not exists
+        const name = item.name || "Unknown";
         counts[name] = counts[name] || 0;
-
-        // 3. Only add if we have fewer than 5 for this name
         if (counts[name] < topN) {
             result.push(item);
             counts[name]++;
         }
     }
 
-    // 4. Final sort by Name (alphabetical) for the table view
-    return result.sort((a, b) => a.name.localeCompare(b.name));
-
+    return result.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
 }
 
 async function loadMedications(client, patientId) {
@@ -431,6 +732,12 @@ async function loadMedications(client, patientId) {
             }
 
             debug("loadMedications finshed!");
+        })
+        .catch(error => {
+            console.error("Error loading Medications:", error);
+            const list = document.getElementById("med-list");
+            list.innerHTML = `<li class="text-red-500 font-semibold text-sm">Failed to load medications: ${error.message || "Unknown error"}</li>`;
+            document.getElementById("medrequest-outcomes").classList.add("hidden");
         });
 
     debug("exiting loadMedications!");
@@ -452,6 +759,7 @@ async function loadLabObservations(client, patientId) {
             const issList = document.getElementById("lab-issues-list");
             issList.innerHTML = "";
 
+            const obsArray = [];
             const outcomes = [];
             const labResults = [];
 
@@ -461,22 +769,7 @@ async function loadLabObservations(client, patientId) {
                 const resType = resource.resourceType;
 
                 if (resType === "Observation") {
-                    const obsName = resource.code?.text || "Unknown";
-
-                    const value = resource.valueQuantity?.value || "-";
-
-                    const li = document.createElement("li");
-                    li.textContent = `${obsName}: `;
-
-                    const span = document.createElement('span');
-                    span.className = 'font-bold';
-                    span.textContent = value;
-                    li.appendChild(span);
-
-                    list.appendChild(li);
-
-                    labResults.push({ name: obsName, value: value });
-
+                    obsArray.push(extractObservationDetails(resource));
                 }
 
                 if (resType === "OperationOutcome") {
@@ -485,6 +778,56 @@ async function loadLabObservations(client, patientId) {
                 }
 
             });
+
+            const topNLabArr = filterTopNObservations(obsArray, 5);
+
+            let lastLab = "";
+            topNLabArr.forEach(item => {
+                if (isNullOrEmpty(lastLab) || lastLab.trim().toLowerCase() !== item.name.trim().toLowerCase()) {
+                    const li = document.createElement("li");
+                    li.textContent = `${item.name}: `;
+                    const span = document.createElement('span');
+                    span.className = 'font-bold';
+                    span.textContent = `${item.value} ${item.uom}`;
+                    li.appendChild(span);
+                    list.appendChild(li);
+
+                    lastLab = item.name.trim().toLowerCase();
+                    labResults.push({ name: item.name, value: item.value });
+                }
+            });
+
+            // Only show the details table if at least one lab has history (more than 1 entry total)
+            const showDetails = topNLabArr.length > labResults.length;
+            let recentLabsDetails = document.getElementById("recent-labs");
+
+            if (showDetails) {
+                let labsTblContainer = document.getElementById("labs-table");
+
+                if (!recentLabsDetails) {
+                    recentLabsDetails = document.createElement('details');
+                    recentLabsDetails.id = "recent-labs";
+                    recentLabsDetails.className = "group mt-4";
+
+                    recentLabsDetails.innerHTML = `
+                        <summary class="ml-6 pl-4 font-normal cursor-pointer list-none flex items-center">
+                            Last 5 Reports for all Lab Results <span class="ml-2 transition-transform group-open:rotate-180">▼</span>
+                        </summary>
+                        <div id="labs-table" class="mt-2 text-gray-800"></div>
+                    `;
+                    const outcomesDiv = document.getElementById("labrequest-outcomes");
+                    outcomesDiv.parentNode.insertBefore(recentLabsDetails, outcomesDiv);
+                    labsTblContainer = document.getElementById("labs-table");
+                } else {
+                    recentLabsDetails.classList.remove("hidden");
+                    labsTblContainer.innerHTML = "";
+                }
+
+                labsTblContainer.appendChild(createObservationTable(topNLabArr));
+            } else if (recentLabsDetails) {
+                // Hide it if it was previously created but the current patient has no history
+                recentLabsDetails.classList.add("hidden");
+            }
 
             if (labResults.length > 0) {
                 global_dict.labResults = labResults;
@@ -501,6 +844,12 @@ async function loadLabObservations(client, patientId) {
             }
 
             debug("loadLabObservations finshed!");
+        })
+        .catch(error => {
+            console.error("Error loading Lab Observations:", error);
+            const list = document.getElementById("lab-list");
+            list.innerHTML = `<li class="text-red-500 font-semibold text-sm">Failed to load lab results: ${error.message || "Unknown error"}</li>`;
+            document.getElementById("labrequest-outcomes").classList.add("hidden");
         });
 
     debug("exiting loadLabObservations!");
@@ -536,60 +885,7 @@ async function loadVitals(client, patientId) {
                 const resType = resource.resourceType;
 
                 if (resType === "Observation") {
-
-                    if (resource.valueQuantity) {
-                        const obsItem = {
-                            name: resource.code?.text || "Unknown",
-                            value: resource.valueQuantity.value || "",
-                            uom: resource.valueQuantity.unit || "",
-                            obsDate: resource.effectiveDateTime
-                        }
-
-                        obsArray.push(obsItem);
-                    } else {
-
-                        // handle other types ... 
-                        if (resource.component?.length > 0) {
-                            // probably something found
-
-                            const name = resource.code.text || "";
-                            const obsDate = resource.effectiveDateTime;
-
-                            let value = "", uom = "";
-
-                            if (name.toLowerCase() === "blood pressure") {
-                                let bp_sys = "";
-                                let bp_sys_uom = "";
-                                let bp_dia = "";
-                                let bp_dia_uom = "";
-
-                                resource.component.forEach(item => {
-                                    if (item.code.text.toLowerCase().includes("systolic")) {
-                                        bp_sys = item.valueQuantity.value;
-                                        bp_sys_uom = item.valueQuantity.unit;
-                                    }
-
-                                    if (item.code.text.toLowerCase().includes("diastolic")) {
-                                        bp_dia = item.valueQuantity.value;
-                                        bp_dia_uom = item.valueQuantity.unit;
-                                    }
-                                });
-
-                                value = `${bp_sys} / ${bp_dia}`;
-                                uom = bp_sys_uom || bp_dia_uom;
-
-                                const obsItem = {
-                                    name: name,
-                                    value: value,
-                                    uom: uom,
-                                    obsDate: obsDate
-                                }
-                                obsArray.push(obsItem);
-                            }
-                        }
-
-                    }
-
+                    obsArray.push(extractObservationDetails(resource));
                 }
 
                 if (resType === "OperationOutcome") {
@@ -599,7 +895,7 @@ async function loadVitals(client, patientId) {
 
             });
 
-            const topNVitalsArr = filterTopNVitals(obsArray, 5);
+            const topNVitalsArr = filterTopNObservations(obsArray, 5);
 
             let lastVital = "";
             topNVitalsArr.forEach(item => {
@@ -626,7 +922,7 @@ async function loadVitals(client, patientId) {
             }
 
             if (topNVitalsArr.length > 0) {
-                vitalsTbl.appendChild(createVitalsTable(topNVitalsArr));
+                vitalsTbl.appendChild(createObservationTable(topNVitalsArr));
                 document.getElementById("recent-vitals").classList.remove("hidden");
             }
 
@@ -642,6 +938,13 @@ async function loadVitals(client, patientId) {
 
 
             debug("loadVitals finshed!");
+        })
+        .catch(error => {
+            console.error("Error loading Vitals:", error);
+            const list = document.getElementById("vitals-list");
+            list.innerHTML = `<li class="text-red-500 font-semibold text-sm">Failed to load vitals: ${error.message || "Unknown error"}</li>`;
+            document.getElementById("vitalsrequest-outcomes").classList.add("hidden");
+            document.getElementById("recent-vitals").classList.add("hidden");
         });
 
     debug("exiting loadVitals!");
@@ -755,6 +1058,8 @@ async function getSmartMedicalInsights(patientInfo) {
 
     console.log("entering getSmartMedicalInsights...");
 
+    const config = await getConfig();
+
     //const inputText = document.getElementById("medicalText").value;
     const inputText = JSON.stringify(patientInfo);
     const summaryBox = document.getElementById("summary-box");
@@ -768,53 +1073,66 @@ async function getSmartMedicalInsights(patientInfo) {
             <p class="text-indigo-400 italic font-medium">Analyzing your latest lab results...</p>
         </div>`;
 
+    const provider = config.ai_integrations.provider;
+
+    var llm_config = null;
+
+    if (provider === "huggingface" && config.ai_integrations.huggingface) {
+        llm_config = config.ai_integrations?.huggingface || {};
+    }
+
     try {
-        const response = await fetch(API_URL, {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${HF_TOKEN}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                model: `${MODEL_NAME}`,
-                messages: [
-                    {
-                        role: "system",
-                        //content: "You are a concise medical assistant. Summarize strictly in 3-4 bullet points using simple language. Highlight critical values like high blood pressure in bold."
-                        content: "You are a medical analyst. The patient will be reading this and hence use direct advisory tone or neutral explanatory tone. Rule 1: ***IMPORTANT*** Do NOT repeat the numerical values (height, weight, etc) unless they are critical. Rule 2: Provide strictly 3-5 INSIGHTS as markdown bullets (e.g. 'Blood pressure is dangerously high!'). Rule 3: Use simple language."
-                    },
-                    {
-                        role: "user",
-                        content: inputText
-                    }
-                ],
-                max_tokens: 250,
-                temperature: 0.1 // Keeps summary crisp and factual
-            })
-        });
 
-        console.log("about to call llm...");
-        const data = await response.json();
+        if (llm_config) {
+            const response = await fetch(llm_config.api_url, {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${llm_config.hf_token}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    model: `${llm_config.model_name}`,
+                    messages: [
+                        {
+                            role: "system",
+                            //content: "You are a concise medical assistant. Summarize strictly in 3-4 bullet points using simple language. Highlight critical values like high blood pressure in bold."
+                            content: "You are a medical analyst. The patient will be reading this and hence use direct advisory tone or neutral explanatory tone. Rule 1: ***IMPORTANT*** Do NOT repeat the numerical values (height, weight, etc) unless they are critical. Rule 2: Provide strictly 3-5 INSIGHTS as markdown bullets (e.g. 'Blood pressure is dangerously high!'). Rule 3: Use simple language."
+                        },
+                        {
+                            role: "user",
+                            content: inputText
+                        }
+                    ],
+                    max_tokens: 250,
+                    temperature: 0.1 // Keeps summary crisp and factual
+                })
+            });
 
-        if (response.ok) {
-            console.log("response.ok from LLM");
-            var markdownText = data.choices[0].message.content;
-            console.log(data.choices[0].message.content);
+            console.log("about to call llm...");
+            const data = await response.json();
 
-            // add \n\n to ensure bullets are properly taken into account! 
-            markdownText = markdownText.replace(/\n\*/g, "\n\n*");
+            if (response.ok) {
+                console.log("response.ok from LLM");
+                var markdownText = data.choices[0].message.content;
+                console.log(data.choices[0].message.content);
 
-            var htmlText = window.markdown.toHTML(markdownText);
+                // add \n\n to ensure bullets are properly taken into account! 
+                markdownText = markdownText.replace(/\n\*/g, "\n\n*");
 
-            // add proper style markers for any UL/LI items 
-            htmlText = htmlText.replace(/<ul>/g, '<ul class="list-disc pl-6 space-y-3 mb-4">');
-            htmlText = htmlText.replace(/<li>/g, '<li class="text-indigo-900 font-medium">');
+                var htmlText = window.markdown.toHTML(markdownText);
 
-            // 2. Parse Markdown and inject into the styled box
-            summaryBox.innerHTML = htmlText;
+                // add proper style markers for any UL/LI items 
+                htmlText = htmlText.replace(/<ul>/g, '<ul class="list-disc pl-6 space-y-3 mb-4">');
+                htmlText = htmlText.replace(/<li>/g, '<li class="text-indigo-900 font-medium">');
 
+                // 2. Parse Markdown and inject into the styled box
+                summaryBox.innerHTML = htmlText;
+
+            } else {
+                summaryBox.innerHTML = `<p class="text-red-500">Error: ${data.error?.message || "Failed to analyze."}</p>`;
+            }
         } else {
-            summaryBox.innerHTML = `<p class="text-red-500">Error: ${data.error?.message || "Failed to analyze."}</p>`;
+            summaryBox.innerHTML = `<p class="text-red-500">AI Integration not configured properly!</p>`;
         }
     } catch (error) {
         console.error("error occured while calling llm");

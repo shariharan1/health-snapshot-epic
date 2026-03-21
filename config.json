@@ -1,0 +1,31 @@
+{
+  "port": 3443,
+  "redirect_uri": "https://localhost:3443",
+  "fhir_endpoints": {
+    "epic": {
+      "name": "Epic Sandbox",
+      "description": "Standard Epic Systems FHIR Interconnect Sandbox.",
+      "fhir_base_url": "https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4",
+      "client_id": "56feba67-549f-4364-93b2-1cd0ab387b5b",
+      "patient_scopes": "launch/patient openid profile patient/Patient.read patient/MedicationRequest.read patient/Observation.read",
+      "provider_scopes": "launch openid profile patient/Patient.read patient/MedicationRequest.read patient/Observation.read"
+    },
+    "cerner": {
+      "name": "Cerner Sandbox",
+      "description": "Oracle Cerner EHR FHIR Sandbox.",
+      "fhir_base_url": "https://fhir-myrecord.cerner.com/r4/ec2458f2-1e24-41c8-b71b-0e701af7583d",
+      "client_id": "6c5c6a89-fe68-45bd-b42e-6d12ff9e55ae",
+      "patient_scopes": "patient/Patient.read patient/Observation.read launch/patient online_access openid profile",
+      "provider_scopes": "launch openid profile patient/Patient.read patient/MedicationRequest.read patient/Observation.read"
+    }
+  },
+  "ai_integrations": {
+    "enabled": false,
+    "provider": "huggingface",
+    "huggingface": {
+      "api_url": "https://router.huggingface.co/v1/chat/completions",
+      "model_name": "meta-llama/Llama-3.2-1B-Instruct",
+      "hf_token": "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"
+    }
+  }
+}
