@@ -1,4 +1,4 @@
-* This is a Patient facing application connects to EPIC Sandbox to display thier particulars
+* This is a Patient facing application connects to either EPIC or Cerner Sandbox to display thier particulars
 * Displays the following information:
 
   * Patient Info
@@ -16,6 +16,10 @@
 
 * Other notes:
 
+  * implemented Refresh Tokens if and when user opts for it and if the sandbox supports it!
+      * Refresh tokens works fine for Cerner but not for Epic!
+      * need to look into securely storing refresh tokens for proper Refresh-Token usage in Epic!
   * utilizing experimental AI options on edge / chrome didn't work
   * tried over http as well as https
+  * 
   * IMPORTANT TODO: Integrate with HF spaces to protect the HF Token

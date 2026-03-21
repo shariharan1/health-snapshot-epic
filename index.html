@@ -47,6 +47,14 @@
                 Sign in with Epic
             </button>
 
+            <div class="mt-4 flex items-center">
+                <input type="checkbox" id="enable-refresh"
+                    class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded" checked>
+                <label for="enable-refresh" class="ml-2 block text-sm text-gray-700">
+                    Enable Refresh Tokens ?
+                </label>
+            </div>
+
             <div id="login_hint_epic"
                 class="hidden mt-8 p-4 bg-blue-50 border-2 border-dashed border-blue-200 rounded-xl">
                 <h3 class="text-sm font-semibold text-blue-800 tracking-wider mb-3">
@@ -84,6 +92,11 @@
             <button id="logout-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
                 Sign out
             </button>
+            <div id="refresh-token-warning"
+                class="hidden mt-4 p-4 bg-yellow-50 border-2 border-dashed border-yellow-200 rounded-xl">
+                <h3 id="refresh-token-warning-text" class="text-sm font-semibold text-yellow-800 tracking-wider mb-3">
+                </h3>
+            </div>
         </div>
 
 

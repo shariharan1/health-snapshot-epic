@@ -54,6 +54,41 @@ function withLoader(spinnerId, promise) {
     });
 }
 
+function scheduleTokenRefresh(client, expiresInSeconds) {
+
+    debug("Entering scheduleTokenRefresh...");
+
+    if (session_timer_id !== null) {
+        clearTimeout(session_timer_id);
+    }
+
+    // Refresh 60 seconds before it officially expires. 
+    // If lifetime is somehow under 60 seconds, refresh at half its lifetime.
+    const bufferSeconds = Math.min(60, Math.floor(expiresInSeconds / 2));
+    const timeoutMs = Math.max(0, (expiresInSeconds - bufferSeconds)) * 1000;
+
+    debug(`Scheduling background refresh in ${timeoutMs / 1000} seconds...`);
+
+    session_timer_id = setTimeout(async () => {
+        debug('Background timer triggered. Attempting client.refresh()...');
+        try {
+            await client.refresh();
+            const newResp = client.state.tokenResponse;
+            const newExpiresAt = Date.now() + (newResp.expires_in * 1000);
+            localStorage.setItem('fhir_token_expires', newExpiresAt);
+            debug('Refresh successful! New expiry time: ' + new Date(newExpiresAt).toLocaleString());
+
+            // Loop back and schedule the next refresh
+            scheduleTokenRefresh(client, newResp.expires_in);
+        } catch (error) {
+            console.warn("Background session refresh failed!", error);
+            resetToLogin();
+        }
+    }, timeoutMs);
+
+    debug("Exiting scheduleTokenRefresh!");
+}
+
 function resetToLogin() {
     debug("Resetting to login state...");
     client_session = null;
@@ -158,6 +193,12 @@ async function populateEndpoints() {
         select.value = savedEndpoint;
     }
 
+    const savedRefreshPref = localStorage.getItem('enable_refresh_tokens');
+    if (savedRefreshPref !== null) {
+        const checkbox = document.getElementById("enable-refresh");
+        if (checkbox) checkbox.checked = (savedRefreshPref === 'true');
+    }
+
     // trigger change to set initial description and hints ONLY if not redirecting
     if (!isRedirect && select.options.length > 0) {
         select.dispatchEvent(new Event("change"));
@@ -184,32 +225,47 @@ document.getElementById('fhir-endpoint').addEventListener('change', function () 
 
 document.getElementById("login-btn").addEventListener("click", async () => {
 
-    debug("login clicked...");
-    debug(window.location.href);
+    debug("Entering login_click handler...");
+    debug("window.location.href: [" + window.location.href + "]");
 
     const config = await getConfig();
     const selectedKey = document.getElementById("fhir-endpoint").value;
     const endpointConfig = config.fhir_endpoints[selectedKey];
 
+    const enableRefresh = document.getElementById("enable-refresh")?.checked ?? true;
+
     // Save to local storage before redirecting!
     localStorage.setItem('selected_fhir_endpoint', selectedKey);
+    localStorage.setItem('enable_refresh_tokens', enableRefresh ? 'true' : 'false');
 
     if (!endpointConfig) {
         alert("Please select a valid endpoint.");
         return;
     }
 
-    console.log("Redirect URI: " + config.redirect_uri);
-    console.log("Client ID   : " + endpointConfig.client_id);
-    console.log("Scope       : " + endpointConfig.patient_scopes);
-    console.log("Base URL    : " + endpointConfig.fhir_base_url);
+    let finalScopes = endpointConfig.patient_scopes;
+    // Strip offline_access and online_access if checkbox is unchecked
+    if (!enableRefresh) {
+        finalScopes = finalScopes.replace(/\boffline_access\b/g, '')
+            .replace(/\bonline_access\b/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    debug("Redirect URI  : [" + config.redirect_uri + "]");
+    debug("Client ID     : [" + endpointConfig.client_id + "]");
+    debug("Scope         : [" + finalScopes + "]");
+    debug("Base URL      : [" + endpointConfig.fhir_base_url + "]");
+    debug("enableRefresh : [" + enableRefresh + "]");
 
     FHIR.oauth2.authorize({
         clientId: endpointConfig.client_id,
-        scope: endpointConfig.patient_scopes,
+        scope: finalScopes,
         redirectUri: config.redirect_uri,
         iss: endpointConfig.fhir_base_url
     });
+
+    debug("Exiting login_click handler!");
 
     //document.getElementById("endpoint-selection").classList.add("hidden");
 
@@ -252,17 +308,27 @@ async function initApp(client) {
     const patientId = client.patient.id;
 
     const tokenResponse = client.state.tokenResponse;
-
     const expiresAt = Date.now() + (tokenResponse.expires_in * 1000);
 
     localStorage.setItem('fhir_token_expires', expiresAt);
     debug("Current Time: " + (new Date()).toLocaleString() + " | Token expiry time: " + (new Date(expiresAt)).toLocaleString() + " | Token expires in: " + tokenResponse.expires_in + " seconds");
 
-    debug("setting session timer...");
-    session_timer_id = setTimeout(() => {
-        debug('Current time: ' + (new Date()).toLocaleString() + ' | Token expired!');
-        document.getElementById("logout-btn").click();
-    }, tokenResponse.expires_in * 1000);
+    // Start background refresh or normal expiry timer
+    if (tokenResponse.refresh_token) {
+        debug("Refresh token present! Enabling background session refresh...");
+        scheduleTokenRefresh(client, tokenResponse.expires_in);
+    } else {
+        debug("No refresh token present. Setting standard session timeout...");
+
+        const warningText = "Refresh token not available. Your session will expire in " + tokenResponse.expires_in + " seconds at " + (new Date(expiresAt)).toLocaleString() + ". Please sign in again to continue when required!";
+        document.getElementById("refresh-token-warning-text").textContent = warningText;
+        document.getElementById("refresh-token-warning").classList.remove("hidden");
+
+        session_timer_id = setTimeout(() => {
+            debug('Current time: ' + (new Date()).toLocaleString() + ' | Token expired!');
+            resetToLogin();
+        }, tokenResponse.expires_in * 1000);
+    }
 
     document.getElementById("app-content").classList.remove("hidden");
 
@@ -285,19 +351,24 @@ async function initApp(client) {
 
 function getPatientMRN(resPatient) {
 
+    debug("Entering getPatientMRN...");
     const mrnIdentifier = resPatient.identifier?.find(id =>
         id.type?.coding?.some(coding => coding.code === 'MR')
     );
 
     const mrn = mrnIdentifier ? mrnIdentifier.value : "-";
 
-    console.log("Patient MRN:", mrn);
+    debug("Patient MRN: [" + mrn + "]");
+
+    debug("Exiting getPatientMRN!");
 
     return mrn;
 
 }
 
 function getPatientIDs(resPatient) {
+
+    debug("Entering getPatientIDs...");
     const otherIdentifiers = resPatient.identifier?.filter(id => {
 
         // 1. Check if the type code is NOT 'MR'
@@ -310,13 +381,16 @@ function getPatientIDs(resPatient) {
         return isNotMRNCode && isNotMRNSystem;
     }) || [];
 
-    console.log("Other IDs found:", otherIdentifiers);
+    debug("Other IDs found:" + JSON.stringify(otherIdentifiers));
+
+    debug("Exiting getPatientIDs!");
 
     return otherIdentifiers;
 }
 
 function getPatientIDsDisplay(resPatient) {
 
+    debug("Entering getPatientIDsDisplay...");
     const otherIdentifiers = getPatientIDs(resPatient);
 
     if (!otherIdentifiers || otherIdentifiers.length === 0) {
@@ -339,9 +413,10 @@ function getPatientIDsDisplay(resPatient) {
 
     html += "</div>";
 
+    debug("Exiting getPatientIDsDisplay!");
+
     return html;
 }
-
 
 async function loadPatient(client, patientId) {
 
