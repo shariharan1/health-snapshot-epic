@@ -20,9 +20,7 @@ async function getConfig() {
 
 var client_session = null;
 var session_timer_id = null;
-// ==========================
-// ENTRY POINT
-// ==========================
+
 
 // If we're returning from Epic with an auth code,
 // this resolves the OAuth flow automatically.
@@ -45,14 +43,10 @@ function debug(str) {
     }
 }
 
-function withLoader(spinnerId, promise) {
-    const spinner = document.getElementById(spinnerId);
-    spinner.classList.remove("hidden");
 
-    return promise.finally(() => {
-        spinner.classList.add("hidden");
-    });
-}
+// ==========================
+// LOGIN HANDLER/HELPERS 
+// ==========================
 
 function scheduleTokenRefresh(client, expiresInSeconds) {
 
@@ -127,41 +121,6 @@ function resetToLogin() {
     }
 }
 
-FHIR.oauth2.ready()
-    .then(async (client) => {
-        if (isRedirect) {
-            // 1. THIS IS THE INITIAL LOGIN
-            // Do NOT call refresh here; the token is brand new.
-            debug("Freshly authorized!");
-            initApp(client);
-        } else {
-            try {
-                const expiresAt = localStorage.getItem('fhir_token_expires');
-
-                // Fix: parseInt(expiresAt) correctly converts the timestamp string back to a comparable number
-                if (expiresAt && Date.now() > parseInt(expiresAt)) {
-                    // Force a refresh check before doing anything else
-                    // This ensures the client object is active and valid
-                    await client.refresh();
-                }
-
-                // If we reach here, the token is valid or was successfully refreshed
-                initApp(client);
-            } catch (error) {
-                console.warn("Token expired and refresh failed. Falling back to login...", error);
-                resetToLogin();
-            }
-        }
-    })
-    .catch(error => {
-        console.info("No active FHIR session found or OAuth Ready Error:", error);
-        resetToLogin();
-    });
-
-
-// ==========================
-// LOGIN HANDLER
-// ==========================
 async function populateEndpoints() {
     const config = await getConfig();
     const select = document.getElementById("fhir-endpoint");
@@ -205,13 +164,163 @@ async function populateEndpoints() {
     }
 }
 
-populateEndpoints();
-
 function hideLoginHints() {
     document.querySelectorAll('[id^="login_hint_"]').forEach(el => {
         el.classList.add('hidden');
     });
 }
+
+
+// ==========================
+// GLOBALS & HELPER FUNCTIONS
+// ==========================
+
+function withLoader(spinnerId, promise) {
+    const spinner = document.getElementById(spinnerId);
+    spinner.classList.remove("hidden");
+
+    return promise.finally(() => {
+        spinner.classList.add("hidden");
+    });
+}
+
+function isNullOrEmpty(str) {
+    // Check for null or undefined (using loose equality is a common idiom for this)
+    if (str == null) {
+        return true;
+    }
+
+    // Check for an empty string or a string with only whitespace after trimming
+    return typeof str === 'string' && str.trim().length === 0;
+}
+
+function showAlert(message, type = "error") {
+    const alertsDiv = document.getElementById("app-alerts");
+    const alertsText = document.getElementById("app-alerts-text");
+    if (!alertsDiv || !alertsText) return;
+
+    alertsText.textContent = message;
+
+    // Map types to exact Tailwind styling
+    if (type === "warning") {
+        alertsDiv.className = "mb-4 mt-4 p-4 border-2 rounded-xl bg-yellow-50 border-yellow-200 text-yellow-800";
+    } else if (type === "info") {
+        alertsDiv.className = "mb-4 mt-4 p-4 border-2 rounded-xl bg-blue-50 border-blue-200 text-blue-800";
+    } else {
+        alertsDiv.className = "mb-4 mt-4 p-4 border-2 rounded-xl bg-red-50 border-red-200 text-red-800";
+    }
+
+    alertsDiv.classList.remove("hidden");
+}
+
+function showEhrError(msg) {
+    showAlert("EHR Launch Failed: " + msg, "error");
+    resetToLogin();
+}
+
+// ===================================
+// ENTRY POINT & APP LAUNCH HANDLER
+// ===================================
+
+FHIR.oauth2.ready()
+    .then(async (client) => {
+        if (isRedirect) {
+            // 1. THIS IS THE INITIAL LOGIN
+            // Do NOT call refresh here; the token is brand new.
+            debug("Freshly authorized!");
+            initApp(client);
+        } else {
+            try {
+                const expiresAt = localStorage.getItem('fhir_token_expires');
+
+                // Fix: parseInt(expiresAt) correctly converts the timestamp string back to a comparable number
+                if (expiresAt && Date.now() > parseInt(expiresAt)) {
+                    // Force a refresh check before doing anything else
+                    // This ensures the client object is active and valid
+                    await client.refresh();
+                }
+
+                // If we reach here, the token is valid or was successfully refreshed
+                initApp(client);
+            } catch (error) {
+                console.warn("Token expired and refresh failed. Falling back to login...", error);
+                resetToLogin();
+            }
+        }
+    })
+    .catch(error => {
+        console.info("No active FHIR session found or OAuth Ready Error:", error);
+        resetToLogin();
+    });
+
+
+async function handleAppLaunch() {
+
+    debug("entering handleAppLaunch...");
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const iss = urlParams.get("iss");
+    const launch = urlParams.get("launch");
+
+    // 1. EHR LAUNCH ROUTE 
+    if (iss && launch) {
+        debug("EHR Launch detected! ISS: [" + iss + "]");
+
+        const config = await getConfig();
+        let matchedEndpoint = null;
+        let selectedKey = null;
+
+        // Find which config endpoint matches the EHR's provided ISS URL
+        for (const [key, endpoint] of Object.entries(config.fhir_endpoints)) {
+            // Check both patient and provider URLs to smoothly catch Cerner sandbox splits
+            const patientUrl = endpoint.patient_fhir_base_url || endpoint.fhir_base_url || "";
+            const providerUrl = endpoint.provider_fhir_base_url || endpoint.fhir_base_url || "";
+
+            if (iss.toLowerCase().startsWith(patientUrl.toLowerCase()) ||
+                iss.toLowerCase().startsWith(providerUrl.toLowerCase())) {
+                matchedEndpoint = endpoint;
+                selectedKey = key;
+                break;
+            }
+        }
+
+        if (!matchedEndpoint) {
+            console.error("EHR Launch failed: Unknown FHIR ISS URL provided:", iss);
+            showEhrError("Unknown FHIR ISS URL provided (" + iss + ").");
+            return;
+        }
+
+        if (!matchedEndpoint.provider_client_id) {
+            console.error("EHR Launch failed: Provider Client ID is not configured for this endpoint.");
+            showEhrError("Provider Client ID is not configured for EHR Launch on " + matchedEndpoint.name + ".");
+            return;
+        }
+
+        // Save selected key to local storage so standard flow picks it up later
+        localStorage.setItem('selected_fhir_endpoint', selectedKey);
+
+        debug("Initiating EHR Launch Authorize...");
+        // Immediately authorize the EHR context and redirect
+        FHIR.oauth2.authorize({
+            clientId: matchedEndpoint.provider_client_id,
+            scope: matchedEndpoint.provider_scopes, // EHR Launch typically relies on provider_scopes
+            redirectUri: config.redirect_uri,
+            iss: iss
+        });
+    }
+    // 2. OAUTH REDIRECT OR STANDALONE LOCAL ROUTE
+    else {
+        // If we get here, it's either an active Standalone Launch, OR we are returning 
+        // from an OAuth redirect (code/state in URL). 
+        // We let the existing FHIR.oauth2.ready() handle both gracefully!
+        populateEndpoints();
+    }
+
+    debug("exiting handleAppLaunch!");
+}
+
+// Call it on script load
+handleAppLaunch();
 
 document.getElementById('fhir-endpoint').addEventListener('change', function () {
     hideLoginHints();
@@ -221,7 +330,6 @@ document.getElementById('fhir-endpoint').addEventListener('change', function () 
         document.getElementById('login_hint_cerner').classList.remove('hidden');
     }
 });
-
 
 document.getElementById("login-btn").addEventListener("click", async () => {
 
@@ -252,17 +360,24 @@ document.getElementById("login-btn").addEventListener("click", async () => {
             .trim();
     }
 
+    const baseIss = endpointConfig.patient_fhir_base_url || endpointConfig.fhir_base_url;
+
     debug("Redirect URI  : [" + config.redirect_uri + "]");
-    debug("Client ID     : [" + endpointConfig.client_id + "]");
+    debug("Client ID     : [" + endpointConfig.patient_client_id + "]");
     debug("Scope         : [" + finalScopes + "]");
-    debug("Base URL      : [" + endpointConfig.fhir_base_url + "]");
+    debug("Base URL      : [" + baseIss + "]");
     debug("enableRefresh : [" + enableRefresh + "]");
 
+    if (!endpointConfig.patient_client_id) {
+        alert("Patient Client ID is not configured for this endpoint!");
+        return;
+    }
+
     FHIR.oauth2.authorize({
-        clientId: endpointConfig.client_id,
+        clientId: endpointConfig.patient_client_id,
         scope: finalScopes,
         redirectUri: config.redirect_uri,
-        iss: endpointConfig.fhir_base_url
+        iss: baseIss
     });
 
     debug("Exiting login_click handler!");
@@ -306,6 +421,12 @@ async function initApp(client) {
     hideLoginHints();
 
     const patientId = client.patient.id;
+    const encounterId = client.encounter?.id || null;
+
+    if (encounterId) {
+        debug("EHR Launch Encounter Context found! Encounter ID: [" + encounterId + "]");
+        global_dict.encounterId = encounterId;
+    }
 
     const tokenResponse = client.state.tokenResponse;
     const expiresAt = Date.now() + (tokenResponse.expires_in * 1000);
@@ -320,9 +441,10 @@ async function initApp(client) {
     } else {
         debug("No refresh token present. Setting standard session timeout...");
 
-        const warningText = "Refresh token not available. Your session will expire in " + tokenResponse.expires_in + " seconds at " + (new Date(expiresAt)).toLocaleString() + ". Please sign in again to continue when required!";
-        document.getElementById("refresh-token-warning-text").textContent = warningText;
-        document.getElementById("refresh-token-warning").classList.remove("hidden");
+        const warningText = "Refresh token not available. Session will expire at " + (new Date(expiresAt)).toLocaleTimeString() + ". Please sign in again when prompted.";
+
+        // Show our global alert!
+        showAlert(warningText, "warning");
 
         session_timer_id = setTimeout(() => {
             debug('Current time: ' + (new Date()).toLocaleString() + ' | Token expired!');
@@ -476,16 +598,6 @@ async function loadPatient(client, patientId) {
         });
 
     debug("exiting loadPatient!");
-}
-
-function isNullOrEmpty(str) {
-    // Check for null or undefined (using loose equality is a common idiom for this)
-    if (str == null) {
-        return true;
-    }
-
-    // Check for an empty string or a string with only whitespace after trimming
-    return typeof str === 'string' && str.trim().length === 0;
 }
 
 function handleOutcomes(outcomeResource, targetArr) {
