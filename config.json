@@ -8,9 +8,9 @@
       "patient_fhir_base_url": "https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4",
       "provider_fhir_base_url": "https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4",
       "patient_client_id": "56feba67-549f-4364-93b2-1cd0ab387b5b",
-      "provider_client_id": "870e5a1d-91a3-4db8-9e04-710468f21dde",
+      "provider_client_id": "5f037261-0fe3-4ce2-945e-562f1bf226ce",
       "patient_scopes": "launch/patient openid profile offline_access patient/Patient.read patient/MedicationRequest.read patient/Observation.read",
-      "provider_scopes": "launch openid profile patient/Patient.read patient/MedicationRequest.read patient/Observation.read patient/Observation.write patient/Encounter.read"
+      "provider_scopes": "launch openid profile patient/Patient.read patient/MedicationRequest.read patient/Observation.read patient/Observation.write patient/Encounter.read user/Practitioner.read"
     },
     "cerner": {
       "name": "Cerner Sandbox",
@@ -20,7 +20,7 @@
       "patient_client_id": "6c5c6a89-fe68-45bd-b42e-6d12ff9e55ae",
       "provider_client_id": "8578687e-7fcc-464b-9134-330479eb94be",
       "patient_scopes": "patient/Patient.read patient/Observation.read patient/MedicationRequest.read launch/patient online_access offline_access openid profile",
-      "provider_scopes": "launch openid profile patient/Patient.read patient/MedicationRequest.read patient/Observation.read patient/Observation.write patient/Encounter.read"
+      "provider_scopes": "launch openid profile patient/Patient.read patient/MedicationRequest.read patient/Observation.read patient/Observation.write patient/Encounter.read user/Practitioner.read"
     }
   },
   "ai_integrations": {

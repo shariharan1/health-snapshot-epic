@@ -17,19 +17,11 @@ async function getConfig() {
     return _config;
 }
 
-
 var client_session = null;
 var session_timer_id = null;
 
-
-// If we're returning from Epic with an auth code,
-// this resolves the OAuth flow automatically.
-// FHIR.oauth2.ready()
-//     .then(initApp)
-//     .catch(() => {
-//         // Not logged in yet — show login button
-//         document.getElementById("login-section").classList.remove("hidden");
-//     });
+let isEhrRedirecting = false;
+let isEhrLaunch = false;
 
 const isRedirect = new URLSearchParams(window.location.search).has("code");
 
@@ -76,14 +68,14 @@ function scheduleTokenRefresh(client, expiresInSeconds) {
             scheduleTokenRefresh(client, newResp.expires_in);
         } catch (error) {
             console.warn("Background session refresh failed!", error);
-            resetToLogin();
+            resetToLogin("Token refresh failed! Please sign in again.", "error");
         }
     }, timeoutMs);
 
     debug("Exiting scheduleTokenRefresh!");
 }
 
-function resetToLogin() {
+function resetToLogin(strMsg = null, msgType = null) {
     debug("Resetting to login state...");
     client_session = null;
 
@@ -97,27 +89,27 @@ function resetToLogin() {
         window.history.replaceState({}, document.title, cleanUrl);
     }
 
-    const currSandbox = document.getElementById("curr_sandbox");
-    if (currSandbox) currSandbox.classList.add("hidden");
+    document.getElementById("curr_sandbox")?.classList.add("hidden");
+    document.getElementById("logout-section")?.classList.add("hidden");
+    document.getElementById("app-content")?.classList.add("hidden");
 
-    const logoutSection = document.getElementById("logout-section");
-    if (logoutSection) logoutSection.classList.add("hidden");
+    if (!isEhrRedirecting) {
+        document.getElementById("login-section")?.classList.remove("hidden");
 
-    const appContent = document.getElementById("app-content");
-    if (appContent) appContent.classList.add("hidden");
-
-    const loginSection = document.getElementById("login-section");
-    if (loginSection) loginSection.classList.remove("hidden");
-
-    const fhirEndpoint = document.getElementById("fhir-endpoint");
-    if (fhirEndpoint) {
-        const changeEvent = new Event('change', { bubbles: true });
-        fhirEndpoint.dispatchEvent(changeEvent);
+        const fhirEndpoint = document.getElementById("fhir-endpoint");
+        if (fhirEndpoint) {
+            const changeEvent = new Event('change', { bubbles: true });
+            fhirEndpoint.dispatchEvent(changeEvent);
+        }
     }
 
     if (session_timer_id !== null) {
         clearTimeout(session_timer_id);
         session_timer_id = null;
+    }
+
+    if (strMsg !== null) {
+        showAlert(strMsg, msgType);
     }
 }
 
@@ -213,10 +205,10 @@ function showAlert(message, type = "error") {
     alertsDiv.classList.remove("hidden");
 }
 
-function showEhrError(msg) {
-    showAlert("EHR Launch Failed: " + msg, "error");
-    resetToLogin();
-}
+// function showEhrError(msg) {
+//     showAlert("EHR Launch Failed: " + msg, "error");
+//     resetToLogin();
+// }
 
 // ===================================
 // ENTRY POINT & APP LAUNCH HANDLER
@@ -224,10 +216,14 @@ function showEhrError(msg) {
 
 FHIR.oauth2.ready()
     .then(async (client) => {
+        // We set a flag so initApp knows if it needs to reset the expiry clock
+        client._isRefreshOrNew = false;
+
         if (isRedirect) {
             // 1. THIS IS THE INITIAL LOGIN
             // Do NOT call refresh here; the token is brand new.
             debug("Freshly authorized!");
+            client._isRefreshOrNew = true;
             initApp(client);
         } else {
             try {
@@ -238,13 +234,14 @@ FHIR.oauth2.ready()
                     // Force a refresh check before doing anything else
                     // This ensures the client object is active and valid
                     await client.refresh();
+                    client._isRefreshOrNew = true;
                 }
 
                 // If we reach here, the token is valid or was successfully refreshed
                 initApp(client);
             } catch (error) {
                 console.warn("Token expired and refresh failed. Falling back to login...", error);
-                resetToLogin();
+                resetToLogin("Token expired and refresh failed! Please sign in again.", "error");
             }
         }
     })
@@ -264,7 +261,8 @@ async function handleAppLaunch() {
 
     // 1. EHR LAUNCH ROUTE 
     if (iss && launch) {
-        debug("EHR Launch detected! ISS: [" + iss + "]");
+
+        debug("EHR Launch detected! \nISS: [" + iss + "]\nLaunch: [" + launch + "]");
 
         const config = await getConfig();
         let matchedEndpoint = null;
@@ -286,13 +284,13 @@ async function handleAppLaunch() {
 
         if (!matchedEndpoint) {
             console.error("EHR Launch failed: Unknown FHIR ISS URL provided:", iss);
-            showEhrError("Unknown FHIR ISS URL provided (" + iss + ").");
+            resetToLogin("Unknown FHIR ISS URL provided (" + iss + ").", "error");
             return;
         }
 
         if (!matchedEndpoint.provider_client_id) {
             console.error("EHR Launch failed: Provider Client ID is not configured for this endpoint.");
-            showEhrError("Provider Client ID is not configured for EHR Launch on " + matchedEndpoint.name + ".");
+            resetToLogin("Provider Client ID is not configured for EHR Launch on " + matchedEndpoint.name + ".", "error");
             return;
         }
 
@@ -300,6 +298,8 @@ async function handleAppLaunch() {
         localStorage.setItem('selected_fhir_endpoint', selectedKey);
 
         debug("Initiating EHR Launch Authorize...");
+        isEhrRedirecting = true;
+
         // Immediately authorize the EHR context and redirect
         FHIR.oauth2.authorize({
             clientId: matchedEndpoint.provider_client_id,
@@ -388,7 +388,36 @@ document.getElementById("login-btn").addEventListener("click", async () => {
 
 document.getElementById("logout-btn").addEventListener("click", () => {
     debug("logout clicked...");
-    resetToLogin();
+    if (isEhrLaunch) {
+        // Drop the tokens to prevent automatic background re-auth
+        sessionStorage.clear();
+        localStorage.removeItem('fhir_token_expires');
+
+        // Attempt to close window (works perfectly in popups and some iframes)
+        window.close();
+
+        // Fallback for strict browsers or isolated iframes
+        document.body.innerHTML = `
+            <div class="flex items-center justify-center h-screen bg-gray-50">
+                <div class="text-center p-8 bg-white border border-gray-200 shadow rounded-lg max-w-md">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4">Signed Out</h2>
+                    <p class="text-gray-600 mb-6">You have been securely signed out. You may now close this window or return to the EHR dashboard.</p>
+                </div>
+            </div>`;
+    } else {
+        resetToLogin("You have been signed out.", "info");
+    }
+});
+
+// ==========================
+// KEYBOARD SHORTCUTS
+// ==========================
+document.addEventListener('keydown', (e) => {
+    // Alt + C to toggle observation codes
+    if (e.altKey && e.key.toLowerCase() === 'c') {
+        const codes = document.querySelectorAll('.obs-code');
+        codes.forEach(c => c.classList.toggle('hidden'));
+    }
 });
 
 const global_dict = {};
@@ -412,8 +441,6 @@ async function initApp(client) {
     document.getElementById("curr_sandbox").textContent = "Current Sandbox: [" + endpointName + "] [" + client.fhirBaseUrl + "]";
 
     // Hide login
-    // document.getElementById("endpoint-selection").classList.add("hidden");
-    // document.getElementById("login-btn").classList.add("hidden");
     document.getElementById("logout-section").classList.remove("hidden");
     document.getElementById("login-section").classList.add("hidden");
 
@@ -428,16 +455,35 @@ async function initApp(client) {
         global_dict.encounterId = encounterId;
     }
 
-    const tokenResponse = client.state.tokenResponse;
-    const expiresAt = Date.now() + (tokenResponse.expires_in * 1000);
+    // Bulletproof method: Check if this session was launched using the Provider Client ID
+    if (endpointConfig && client.state.clientId === endpointConfig.provider_client_id) {
+        isEhrLaunch = true;
+        displayClinicianBanner(client);
+    } else {
+        isEhrLaunch = false;
+    }
 
-    localStorage.setItem('fhir_token_expires', expiresAt);
-    debug("Current Time: " + (new Date()).toLocaleString() + " | Token expiry time: " + (new Date(expiresAt)).toLocaleString() + " | Token expires in: " + tokenResponse.expires_in + " seconds");
+    const tokenResponse = client.state.tokenResponse;
+    let expiresAt = localStorage.getItem('fhir_token_expires');
+
+    // Only recalculate the 10-minute expiry window if this is a brand new token 
+    // (either fresh login OR just force-refreshed!)
+    if (client._isRefreshOrNew || !expiresAt) {
+        expiresAt = Date.now() + (tokenResponse.expires_in * 1000);
+        localStorage.setItem('fhir_token_expires', expiresAt);
+    } else {
+        // We are simply reloading a page with a currently active, unexpired session!
+        expiresAt = parseInt(expiresAt);
+    }
+
+    debug("Current Time: " + (new Date()).toLocaleString() + " | Token expiry time: " + (new Date(expiresAt)).toLocaleString());
 
     // Start background refresh or normal expiry timer
     if (tokenResponse.refresh_token) {
         debug("Refresh token present! Enabling background session refresh...");
-        scheduleTokenRefresh(client, tokenResponse.expires_in);
+        // If we reloaded the page, recalculate exactly how many seconds are left right now!
+        const remainingSeconds = Math.max(1, Math.floor((expiresAt - Date.now()) / 1000));
+        scheduleTokenRefresh(client, remainingSeconds);
     } else {
         debug("No refresh token present. Setting standard session timeout...");
 
@@ -446,10 +492,12 @@ async function initApp(client) {
         // Show our global alert!
         showAlert(warningText, "warning");
 
+        const msRemaining = Math.max(0, expiresAt - Date.now());
+
         session_timer_id = setTimeout(() => {
             debug('Current time: ' + (new Date()).toLocaleString() + ' | Token expired!');
-            resetToLogin();
-        }, tokenResponse.expires_in * 1000);
+            resetToLogin("Session expired! Please sign in again.", "warning");
+        }, msRemaining);
     }
 
     document.getElementById("app-content").classList.remove("hidden");
@@ -574,6 +622,8 @@ async function loadPatient(client, patientId) {
                     </tr>
                 </tbody>
             </table>
+
+            ${isEhrLaunch ? '' : `
             <details class="group mt-4">
                 <summary class="ml-6 pl-4 font-normal cursor-pointer list-none flex items-center">
                     Other Identifiers <span class="ml-2 transition-transform group-open:rotate-180">▼</span>
@@ -582,6 +632,7 @@ async function loadPatient(client, patientId) {
                     ${getPatientIDsDisplay(patient)}
                 </div>
             </details>
+            `}
         </div>
       `;
 
@@ -598,6 +649,109 @@ async function loadPatient(client, patientId) {
         });
 
     debug("exiting loadPatient!");
+}
+
+async function displayClinicianBanner(client) {
+
+    debug("entering displayClinicianBanner...");
+
+    // Epic and Cerner hide the Practitioner ID in wildly different places depending on SMART v1 vs v2
+    let practitionerId = null;
+    let rawIdToken = client.state.idToken;
+
+    // If fhirclient skipped parsing the id_token natively, manually decode it!
+    if (!rawIdToken && client.state.tokenResponse?.id_token) {
+        try {
+            const base64Url = client.state.tokenResponse.id_token.split('.')[1];
+            const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+            rawIdToken = JSON.parse(decodeURIComponent(atob(base64).split('').map(function (c) {
+                return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+            }).join('')));
+        } catch (e) {
+            debug("Failed to manually decode id_token for practitioner extraction.");
+        }
+    }
+
+    if (client.user && client.user.resourceType === "Practitioner" && client.user.id) {
+        practitionerId = client.user.id;
+    } else if (client.state.tokenResponse?.practitioner) {
+        practitionerId = client.state.tokenResponse.practitioner;
+    } else if (rawIdToken?.fhirUser) {
+        const parts = rawIdToken.fhirUser.split("/");
+        practitionerId = parts[parts.length - 1];
+    } else if (rawIdToken?.sub) {
+        // Fallback: Epic Sandbox subject claims sometimes contain the naked Provider ID
+        practitionerId = rawIdToken.sub;
+    }
+
+    if (practitionerId) {
+        // Strip any prefixes off the ID 
+        practitionerId = practitionerId.replace("Practitioner/", "");
+
+        debug("about to retrieve practitioner details for [" + practitionerId + "]...");
+
+        let fullName = "Clinician Name Unavailable";
+
+        try {
+            // Retrieve the Practitioner resource directly from the FHIR server
+            const practitioner = await client.request(`Practitioner/${practitionerId}`);
+
+            // Safely pluck the official name out of the JSON payload
+            const name = practitioner.name && practitioner.name[0];
+            if (name) {
+                fullName = `${name.given?.join(" ")} ${name.family}`;
+            }
+        } catch (error) {
+            console.warn("Failed to fetch Clinician details (likely missing user/Practitioner.read scope): ", error);
+        }
+
+        const banner = document.getElementById("clinician-banner");
+        if (banner) {
+            // Ensure Encounter ID displays correctly
+            const encounterIdStr = global_dict.encounterId ? global_dict.encounterId : "None Provided";
+
+            banner.innerHTML = `
+                <div class="flex justify-between items-start w-full">
+                    <div class="flex flex-col">
+                        <span class="font-semibold text-blue-900 text-lg">${fullName}</span>
+                        <span class="text-xs text-blue-700 font-mono mt-1">${rawIdToken?.fhirUser || practitionerId}</span>
+                    </div>
+                    <div class="flex flex-col text-right">
+                        <span class="font-semibold text-blue-900">Encounter: ${encounterIdStr}</span>
+                        <span id="encounter-details-placeholder" class="text-xs text-blue-700 mt-1 italic">Loading visit details...</span>
+                    </div>
+                </div>
+            `;
+            banner.classList.remove("hidden");
+        }
+    }
+
+    debug("exiting displayClinicianBanner!");
+}
+
+function debugJWT(client) {
+
+    debug("=== RAW TOKEN RESPONSE ===");
+    console.dir(client.state.tokenResponse);
+    // Some versions of fhirclient securely parse the idToken natively:
+    if (client.state.idToken) {
+        debug("=== DECODED ID TOKEN (FHIRCLIENT) ===");
+        console.dir(client.state.idToken);
+    }
+    // Otherwise, we can manually slice open the JWT string ourselves!
+    else if (client.state.tokenResponse?.id_token) {
+        try {
+            const base64Url = client.state.tokenResponse.id_token.split('.')[1];
+            const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+            const jsonPayload = decodeURIComponent(atob(base64).split('').map(function (c) {
+                return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+            }).join(''));
+            debug("=== DECODED ID TOKEN (MANUAL) ===");
+            console.dir(JSON.parse(jsonPayload));
+        } catch (e) {
+            console.error("Failed to manual decode id_token:", e);
+        }
+    }
 }
 
 function handleOutcomes(outcomeResource, targetArr) {
@@ -634,10 +788,12 @@ function displayOutcomes(parentSection, targetList, targetArr) {
 }
 
 function extractObservationDetails(resource) {
-    // 1. Get the Observation Name
+    // 1. Get the Observation Name and Code
     const obsName = resource.code?.text
         || resource.code?.coding?.[0]?.display
         || "Unknown Observation";
+
+    const obsCode = resource.code?.coding?.[0]?.code || "";
 
     // 2. Get the Date (Falling back to edge-case fields if effectiveDateTime is absent)
     const obsDate = resource.effectiveDateTime
@@ -702,6 +858,7 @@ function extractObservationDetails(resource) {
 
     return {
         name: obsName,
+        code: obsCode,
         value: String(value).trim(),
         uom: uom,
         obsDate: obsDate
@@ -739,9 +896,13 @@ function createObservationTable(dataArray) {
             const obsDateRaw = item.obsDate;
             const formattedDate = obsDateRaw ? new Date(obsDateRaw).toLocaleString() : "Unknown";
 
+            // const codeHtml = item.code ? `<div class="obs-code hidden text-xs text-blue-500 mt-1 font-mono tracking-wider">[${item.code}]</div>` : "";
+            // ${codeHtml}
             tr.innerHTML = `
                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formattedDate}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${item.name || "Unknown"}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                    ${item.name || "Unknown"}
+                </td>
                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.value || ""} ${item.uom || ""}</td>
             `;
             tbody.appendChild(tr);
@@ -853,29 +1014,28 @@ async function loadMedications(client, patientId) {
                     if (isNullOrEmpty(displayName)) {
                         displayName = resource.medicationReference?.display || "";
 
-                        if (!isNullOrEmpty(displayName)) {
-                            medications.push(displayName);
-                        }
-
-                        // this is just for testing!
-                        if (!isNullOrEmpty(medReference)) {
-                            client.request(medReference)
-                                .then(medication => {
-                                    displayName += " [" + medication.code?.text + " ]";
-                                });
-                        }
-
-                        if (isNullOrEmpty(displayName)) {
-                            if (isNullOrEmpty(medReference)) {
-                                displayName = "Unknown";
+                        // If there is still no display name, check inline contained resources 
+                        if (isNullOrEmpty(displayName) && !isNullOrEmpty(medReference)) {
+                            // If it starts with '#', it's a "Contained Resource" within the SAME JSON payload.
+                            // We shouldn't send a network request for it; we look it up!
+                            if (medReference.startsWith("#")) {
+                                const containedMed = resource.contained?.find(c => c.id === medReference.substring(1));
+                                if (containedMed) {
+                                    displayName = containedMed.code?.text || containedMed.code?.coding?.[0]?.display || "Contained Medication";
+                                } else {
+                                    displayName = "Unknown Medication Reference";
+                                }
                             } else {
-                                client.request(medReference)
-                                    .then(medication => {
-                                        displayName += " [" + medication.code?.text + " ]";
-                                    });
+                                // For real network requests, updating local string variables in a background promise 
+                                // won't update the UI since the DOM rendering happens synchronously right below.
+                                // Better to just print the reference URL for now:
+                                displayName = "Ref: " + medReference;
                             }
                         }
 
+                        if (!isNullOrEmpty(displayName)) {
+                            medications.push(displayName);
+                        }
                     }
 
                     const li = document.createElement("li");
@@ -1089,14 +1249,30 @@ async function loadVitals(client, patientId) {
                 if (isNullOrEmpty(lastVital) || lastVital.trim().toLowerCase() !== item.name.trim().toLowerCase()) {
 
                     //debug(`last vital : [${lastVital}] new [${item.name}]`);
+                    const codeBadge = item.code ? `<span class="obs-code hidden inline text-[10px] text-blue-600 font-mono bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">[${item.code}]</span> ` : "";
 
                     const li = document.createElement("li");
-                    li.textContent = `${item.name}: `;
+                    li.className = "flex flex-col p-3 mb-3 bg-white border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-shadow group";
 
-                    const span = document.createElement('span');
-                    span.className = 'font-bold';
-                    span.textContent = `${item.value} ${item.uom}`;
-                    li.appendChild(span);
+                    li.innerHTML = `
+                        <div class="flex justify-between items-start w-full">
+                            <div class="flex flex-row items-center">
+                                ${codeBadge}&nbsp;<span class="inline text-sm font-semibold text-gray-800">${item.name}</span>
+                            </div>
+                            <!-- Future Edit Button 
+                            <button class="opacity-0 group-hover:opacity-100 text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-all">
+                                Edit
+                            </button>
+                            -->
+                        </div>
+                        <div class="flex justify-between items-end mt-1 w-full relative">
+                            <div class="text-xl font-bold text-blue-900">
+                                ${item.value} <span class="text-sm font-medium text-gray-500 ml-1">${item.uom}</span>
+                            </div>
+                            <!-- Future Submit/Cancel container would map here via JS relative positioning -->
+                        </div>
+                    `;
+
                     list.appendChild(li);
 
                     lastVital = item.name.trim().toLowerCase();
