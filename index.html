@@ -195,9 +195,19 @@
             </div>
 
             <div id="divVitals">
-                <h2 class="font-semibold text-lg">Vital Signs</h2>
+                <div class="flex justify-between items-center mb-2">
+                    <h2 class="font-semibold text-lg">Vital Signs</h2>
+                    <button id="global-record-btn"
+                        class="hidden flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg text-sm font-medium border border-blue-200 transition-colors">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4">
+                            </path>
+                        </svg>
+                        Record
+                    </button>
+                </div>
 
-                <div id="vitalsSpinner" class="flex items-center gap-2 text-sm text-gray-500 mt-2">
+                <div id="vitalsSpinner" class="hidden flex items-center gap-2 text-sm text-gray-500 mt-2">
                     <div class="animate-spin h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full"></div>
                     <span>Loading Vitals...</span>
                 </div>

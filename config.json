@@ -10,7 +10,7 @@
       "patient_client_id": "56feba67-549f-4364-93b2-1cd0ab387b5b",
       "provider_client_id": "5f037261-0fe3-4ce2-945e-562f1bf226ce",
       "patient_scopes": "launch/patient openid profile offline_access patient/Patient.read patient/MedicationRequest.read patient/Observation.read",
-      "provider_scopes": "launch openid profile patient/Patient.read patient/MedicationRequest.read patient/Observation.read patient/Observation.write patient/Encounter.read user/Practitioner.read"
+      "provider_scopes": "launch openid profile patient/Patient.read patient/MedicationRequest.read patient/MedicationRequest.search patient/Observation.read patient/Observation.write patient/Encounter.read user/Practitioner.read"
     },
     "cerner": {
       "name": "Cerner Sandbox",
@@ -20,7 +20,73 @@
       "patient_client_id": "6c5c6a89-fe68-45bd-b42e-6d12ff9e55ae",
       "provider_client_id": "8578687e-7fcc-464b-9134-330479eb94be",
       "patient_scopes": "patient/Patient.read patient/Observation.read patient/MedicationRequest.read launch/patient online_access offline_access openid profile",
-      "provider_scopes": "launch openid profile patient/Patient.read patient/MedicationRequest.read patient/Observation.read patient/Observation.write patient/Encounter.read user/Practitioner.read"
+      "provider_scopes": "launch openid profile fhirUser patient/Patient.read patient/MedicationRequest.read patient/Observation.read patient/Observation.write patient/Encounter.read user/Practitioner.read user/Observation.write ",
+      "vitals_loinc_codes": [
+        {
+          "entry_type": "quantity",
+          "vital_sign": "Heart Rate",
+          "loinc_code": "69000-8",
+          "uom": [
+            "{beats}/min"
+          ]
+        },
+        {
+          "entry_type": "quantity",
+          "vital_sign": "Temperature Oral",
+          "loinc_code": "8331-1",
+          "uom": [
+            "Cel"
+          ]
+        },
+        {
+          "entry_type": "codeableconcept",
+          "vital_sign": "Blood Pressure",
+          "loinc_code": "85354-9",
+          "components": [
+            {
+              "entry_type": "quantity",
+              "vital_sign": "Systolic Blood Pressure",
+              "loinc_code": "8480-6",
+              "uom": [
+                "mm[Hg]"
+              ]
+            },
+            {
+              "entry_type": "quantity",
+              "vital_sign": "Diastolic Blood Pressure",
+              "loinc_code": "8462-4",
+              "uom": [
+                "mm[Hg]"
+              ]
+            }
+          ]
+        },
+        {
+          "entry_type": "quantity",
+          "vital_sign": "Body Weight (Measured)",
+          "loinc_code": "3141-9",
+          "uom": [
+            "kg",
+            "[lb_av]"
+          ]
+        },
+        {
+          "entry_type": "quantity",
+          "vital_sign": "Body Height (Measured)",
+          "loinc_code": "8302-2",
+          "uom": [
+            "cm"
+          ]
+        },
+        {
+          "entry_type": "quantity",
+          "vital_sign": "Body Mass Index (BMI)",
+          "loinc_code": "39156-5",
+          "uom": [
+            "kg/m2"
+          ]
+        }
+      ]
     }
   },
   "ai_integrations": {
@@ -30,6 +96,134 @@
       "api_url": "https://router.huggingface.co/v1/chat/completions",
       "model_name": "meta-llama/Llama-3.2-1B-Instruct",
       "hf_token": "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"
+    }
+  },
+  "loinc_config": {
+    "header_codes_to_ignore": [
+      {
+        "code": "8716-3",
+        "comment": "Vital signs (Generic)"
+      },
+      {
+        "code": "85354-9",
+        "comment": "Blood pressure panel"
+      },
+      {
+        "code": "85353-1",
+        "comment": "Vital signs, weight, height, BMI panel"
+      },
+      {
+        "code": "34566-0",
+        "comment": "Vital signs with method details panel"
+      },
+      {
+        "code": "74728-7",
+        "comment": "Vitals, weight, height, oximetry, BMI, BSA panel"
+      },
+      {
+        "code": "34565-2",
+        "comment": "Vital signs, weight and height panel"
+      },
+      {
+        "code": "67795-5",
+        "comment": "Vital signs, weight, height, oximetry panel"
+      },
+      {
+        "code": "35095-9",
+        "comment": "Body temperature panel"
+      },
+      {
+        "code": "59417-6",
+        "comment": "Pulse Oximetry Panel"
+      }
+    ],
+    "patient_generated_vitals": [
+      {
+        "vital_sign": "Heart Rate",
+        "loinc_code": "8867-4",
+        "uom": [
+          "{beats}/min"
+        ]
+      },
+      {
+        "vital_sign": "Respiratory Rate",
+        "loinc_code": "9279-1",
+        "uom": [
+          "{breaths}/min"
+        ]
+      },
+      {
+        "vital_sign": "Body Temperature",
+        "loinc_code": "8310-5",
+        "uom": [
+          "Cel",
+          "[degF]"
+        ]
+      },
+      {
+        "vital_sign": "Systolic Blood Pressure",
+        "loinc_code": "8480-6",
+        "uom": [
+          "mm[Hg]"
+        ]
+      },
+      {
+        "vital_sign": "Diastolic Blood Pressure",
+        "loinc_code": "8462-4",
+        "uom": [
+          "mm[Hg]"
+        ]
+      },
+      {
+        "vital_sign": "Weight",
+        "loinc_code": "29463-7",
+        "uom": [
+          "kg",
+          "[lb_av]"
+        ]
+      },
+      {
+        "vital_sign": "Body Weight (Measured)",
+        "loinc_code": "3141-9",
+        "uom": [
+          "kg",
+          "[lb_av]"
+        ]
+      },
+      {
+        "vital_sign": "Body Height (Measured)",
+        "loinc_code": "8302-2",
+        "uom": [
+          "cm",
+          "[in_us]",
+          "m"
+        ]
+      },
+      {
+        "vital_sign": "Oxygen Saturation (SpO2)",
+        "loinc_code": "59408-5",
+        "uom": [
+          "%"
+        ]
+      },
+      {
+        "vital_sign": "Oxygen Saturation (SaO2)",
+        "loinc_code": "2708-6",
+        "uom": [
+          "%"
+        ]
+      },
+      {
+        "vital_sign": "Body Mass Index (BMI)",
+        "loinc_code": "39156-5",
+        "uom": [
+          "kg/m2"
+        ]
+      }
+    ],
+    "bp_display_order": {
+      "8480-6": 1,
+      "8462-4": 2
     }
   }
 }

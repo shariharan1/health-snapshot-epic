@@ -22,6 +22,8 @@ var session_timer_id = null;
 
 let isEhrRedirecting = false;
 let isEhrLaunch = false;
+let endpointConfig = null;
+let endpointName = null;
 
 const isRedirect = new URLSearchParams(window.location.search).has("code");
 
@@ -203,6 +205,34 @@ function showAlert(message, type = "error") {
     }
 
     alertsDiv.classList.remove("hidden");
+}
+
+function formatDateTime(dateInput) {
+    try {
+        // Basic check for null/undefined
+        if (dateInput === null || dateInput === undefined) return "";
+
+        const date = new Date(dateInput);
+
+        // If the Date object is invalid, return the original input as a string
+        if (isNaN(date.getTime())) {
+            return String(dateInput);
+        }
+
+        // Format to dd/MM/yy HH:mm
+        return new Intl.DateTimeFormat('en-GB', {
+            day: '2-digit',
+            month: 'short',
+            year: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hourCycle: 'h23' // Ensures 00-23 format
+        }).format(date).replace(',', '');
+
+    } catch (e) {
+        // Final fallback for total failures
+        return String(dateInput);
+    }
 }
 
 // function showEhrError(msg) {
@@ -421,6 +451,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 const global_dict = {};
+const global_dict_pii = {};
 
 // ==========================
 // AFTER AUTHENTICATION
@@ -434,8 +465,8 @@ async function initApp(client) {
 
     const config = await getConfig();
     const savedEndpointKey = localStorage.getItem('selected_fhir_endpoint') || "";
-    const endpointConfig = config.fhir_endpoints[savedEndpointKey];
-    const endpointName = endpointConfig ? endpointConfig.name : savedEndpointKey;
+    endpointConfig = config.fhir_endpoints[savedEndpointKey];
+    endpointName = endpointConfig ? endpointConfig.name : savedEndpointKey;
 
     document.getElementById("curr_sandbox").classList.remove("hidden");
     document.getElementById("curr_sandbox").textContent = "Current Sandbox: [" + endpointName + "] [" + client.fhirBaseUrl + "]";
@@ -447,18 +478,25 @@ async function initApp(client) {
     document.getElementById("recent-vitals").classList.add("hidden");
     hideLoginHints();
 
-    const patientId = client.patient.id;
-    const encounterId = client.encounter?.id || null;
+    // Attach Vitals Record Handler
+    const globalRecordBtn = document.getElementById("global-record-btn");
+    if (globalRecordBtn) {
+        globalRecordBtn.addEventListener("click", handleGlobalRecordClick);
+    }
 
-    if (encounterId) {
-        debug("EHR Launch Encounter Context found! Encounter ID: [" + encounterId + "]");
-        global_dict.encounterId = encounterId;
+    const patientId = client.patient.id;
+    global_dict_pii.patientId = client.patient.id;
+    global_dict_pii.encounterId = client.encounter?.id || null;
+
+    if (global_dict_pii.encounterId) {
+        debug("EHR Launch Encounter Context found! Encounter ID: [" + global_dict_pii.encounterId + "]");
+        //global_dict.encounterId = global_dict_pii.encounterId;
     }
 
     // Bulletproof method: Check if this session was launched using the Provider Client ID
     if (endpointConfig && client.state.clientId === endpointConfig.provider_client_id) {
         isEhrLaunch = true;
-        displayClinicianBanner(client);
+        displayClinicianBanner(client, global_dict_pii.encounterId);
     } else {
         isEhrLaunch = false;
     }
@@ -503,11 +541,11 @@ async function initApp(client) {
     document.getElementById("app-content").classList.remove("hidden");
 
     await Promise.all([
-        loadPatient(client, patientId),
+        loadPatient(client, global_dict_pii.patientId),
         //loadMedications(client, patientId),
-        withLoader("medicationsSpinner", loadMedications(client, patientId)),
-        withLoader("labRequestsSpinner", loadLabObservations(client, patientId)),
-        withLoader("vitalsSpinner", loadVitals(client, patientId))
+        withLoader("medicationsSpinner", loadMedications(client, global_dict_pii.patientId)),
+        withLoader("labRequestsSpinner", loadLabObservations(client, global_dict_pii.patientId)),
+        withLoader("vitalsSpinner", loadVitals(client, global_dict_pii.patientId))
     ]);
 
     debug("All data loaded...");
@@ -599,6 +637,8 @@ async function loadPatient(client, patientId) {
             const name = patient.name?.[0];
             const fullName = `${name?.given?.join(" ")} ${name?.family}`;
 
+            global_dict_pii.patientName = fullName;
+
             global_dict.gender = patient.gender;
             global_dict.birthDate = patient.birthDate;
 
@@ -651,9 +691,41 @@ async function loadPatient(client, patientId) {
     debug("exiting loadPatient!");
 }
 
-async function displayClinicianBanner(client) {
+async function getPractitioner(client, practitionerId) {
+    debug("entering getPractitioner [" + practitionerId + "]...");
+    try {
+        // You MUST return the result of the await
+        const practitioner = await client.request(`Practitioner/${practitionerId}`);
+        debug("Practitioner: ", JSON.stringify(practitioner));
+        return practitioner;
+    } catch (error) {
+        debug("getPractitioner failed...");
+        debug(error);
+        return null;
+    } finally {
+        debug("exiting getPractitioner!");
+    }
+}
 
-    debug("entering displayClinicianBanner...");
+async function getEncounter(client, encounterId) {
+    debug("entering getEncounter [" + encounterId + "]...");
+    try {
+        // You MUST return the result of the await
+        const encounter = await client.request(`Encounter/${encounterId}`);
+        debug("Encounter: ", JSON.stringify(encounter));
+        return encounter;
+    } catch (error) {
+        debug("getEncounter failed...");
+        debug(error);
+        return null;
+    } finally {
+        debug("exiting getEncounter!");
+    }
+}
+
+async function displayClinicianBanner(client, encounterId) {
+
+    debug("entering displayClinicianBanner [" + encounterId + "]...");
 
     // Epic and Cerner hide the Practitioner ID in wildly different places depending on SMART v1 vs v2
     let practitionerId = null;
@@ -688,45 +760,112 @@ async function displayClinicianBanner(client) {
         // Strip any prefixes off the ID 
         practitionerId = practitionerId.replace("Practitioner/", "");
 
-        debug("about to retrieve practitioner details for [" + practitionerId + "]...");
+        let fullName = "--";
 
-        let fullName = "Clinician Name Unavailable";
+        // Get the Practitioner Role
+        const practitioner = await getPractitioner(client, practitionerId);
 
-        try {
-            // Retrieve the Practitioner resource directly from the FHIR server
-            const practitioner = await client.request(`Practitioner/${practitionerId}`);
-
+        if (practitioner) {
             // Safely pluck the official name out of the JSON payload
             const name = practitioner.name && practitioner.name[0];
             if (name) {
                 fullName = `${name.given?.join(" ")} ${name.family}`;
             }
-        } catch (error) {
-            console.warn("Failed to fetch Clinician details (likely missing user/Practitioner.read scope): ", error);
         }
 
         const banner = document.getElementById("clinician-banner");
         if (banner) {
             // Ensure Encounter ID displays correctly
-            const encounterIdStr = global_dict.encounterId ? global_dict.encounterId : "None Provided";
+            const encounterIdStr = global_dict_pii.encounterId ? global_dict_pii.encounterId : "None Provided";
 
             banner.innerHTML = `
                 <div class="flex justify-between items-start w-full">
                     <div class="flex flex-col">
+                        <span class="text-[9px] uppercase tracking-widest text-blue-700 font-semibold mt-1">Clinician/Provider Name</span>
                         <span class="font-semibold text-blue-900 text-lg">${fullName}</span>
-                        <span class="text-xs text-blue-700 font-mono mt-1">${rawIdToken?.fhirUser || practitionerId}</span>
+                        <span class="text-xs text-blue-700 font-mono mt-0.5">${rawIdToken?.fhirUser || practitionerId}</span>
+                        <div id="encounter-participants" class="text-[10px] text-blue-600 mt-1.5 font-medium opacity-80 italic max-w-md truncate"></div>
                     </div>
-                    <div class="flex flex-col text-right">
-                        <span class="font-semibold text-blue-900">Encounter: ${encounterIdStr}</span>
-                        <span id="encounter-details-placeholder" class="text-xs text-blue-700 mt-1 italic">Loading visit details...</span>
+                    <div class="flex flex-col text-right min-w-[140px]">
+                        <div class="flex flex-col">
+                            <span class="text-[9px] uppercase tracking-widest text-blue-700 font-semibold mt-1">Admitted Time</span>
+                            <span id="encounter-time" class="font-bold text-blue-900 text-base leading-none">--:--</span>
+                        </div>
+                        <div id="encounter-status-container" class="mt-2 text-right">
+                            <span id="encounter-status" class="inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-tighter bg-blue-50 text-blue-600 border border-blue-100">...</span>
+                        </div>
                     </div>
                 </div>
             `;
             banner.classList.remove("hidden");
+
+            await displayEncounterDetails(client, global_dict_pii.encounterId);
         }
     }
 
     debug("exiting displayClinicianBanner!");
+}
+
+async function displayEncounterDetails(client, encounterId) {
+    debug("entering displayEncounterDetails [" + encounterId + "]...");
+    try {
+        //const encounter = await client.request(`Encounter/${encounterId}`);
+        const encounter = await getEncounter(client, encounterId);
+
+        debug("Encounter Details fetched: ", JSON.stringify(encounter));
+
+        // 1. Extract and format Admitted Time
+        const admittedTime = encounter.period?.start;
+        const formattedTime = admittedTime ? formatDateTime(admittedTime) : "N/A";
+
+        // 2. Extract Status
+        const status = encounter.status || "-";
+
+        // 3. Extract Participants
+        const participantMap = new Map();
+        encounter.participant?.forEach(p => {
+            const name = p.individual?.display || "Unknown";
+            const role = p.type?.[0]?.text || "Participant";
+            if (participantMap.has(name)) {
+                participantMap.set(name, `${participantMap.get(name)}, ${role}`);
+            } else {
+                participantMap.set(name, role);
+            }
+        });
+        const participantsList = Array.from(participantMap.entries())
+            .map(([name, roles]) => `${name} (${roles})`)
+            .join(" | ");
+
+        // Update UI Elements
+        const timeEl = document.getElementById("encounter-time");
+        const statusEl = document.getElementById("encounter-status");
+        const participantsEl = document.getElementById("encounter-participants");
+
+        if (timeEl) timeEl.textContent = formattedTime;
+
+        if (statusEl) {
+            statusEl.textContent = status;
+            if (status === "finished") {
+                statusEl.className = "inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-tighter bg-green-50 text-green-700 border border-green-100";
+            } else if (status === "in-progress" || status === "arrived") {
+                statusEl.className = "inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-tighter bg-blue-50 text-blue-700 border border-blue-100 animate-pulse";
+            } else {
+                statusEl.className = "inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-tighter bg-gray-50 text-gray-500 border border-gray-100";
+            }
+        }
+
+        if (participantsEl) {
+            participantsEl.textContent = participantsList ? `Care Team: ${participantsList}` : "";
+            participantsEl.title = participantsList;
+        }
+
+        return encounter;
+    } catch (error) {
+        debug("Failed to populate Encounter details:", error);
+        return null;
+    } finally {
+        debug("exiting displayEncounterDetails!");
+    }
 }
 
 function debugJWT(client) {
@@ -787,7 +926,7 @@ function displayOutcomes(parentSection, targetList, targetArr) {
 
 }
 
-function extractObservationDetails(resource) {
+async function extractObservationDetails(resource) {
     // 1. Get the Observation Name and Code
     const obsName = resource.code?.text
         || resource.code?.coding?.[0]?.display
@@ -803,23 +942,29 @@ function extractObservationDetails(resource) {
 
     let value = "-";
     let uom = "";
+    let entryType = "quantity"; // default
+    let rawComponents = [];
 
     // 3. Try to extract a top-level value[x]
     if (resource.valueQuantity) {
-        value = resource.valueQuantity.value ?? "-";
+        value = (resource.valueQuantity.value !== undefined) ? resource.valueQuantity.value : "-";
         uom = resource.valueQuantity.unit || resource.valueQuantity.code || "";
+        entryType = "quantity";
     }
     else if (resource.valueCodeableConcept) {
         value = resource.valueCodeableConcept.text
             || resource.valueCodeableConcept.coding?.[0]?.display
             || "-";
+        entryType = "codeableconcept";
     }
     else if (resource.valueString !== undefined) {
         value = resource.valueString;
+        entryType = "string";
     }
 
     // 4. If no top-level value exists, look for components (like Blood Pressure)
     else if (resource.component && resource.component.length > 0) {
+        entryType = "component";
 
         // Let's specifically handle Blood Pressure formatting (Sys / Dia)
         const isBP = obsName.toLowerCase().includes("blood pressure");
@@ -830,39 +975,156 @@ function extractObservationDetails(resource) {
 
             resource.component.forEach(comp => {
                 const compName = comp.code?.text || comp.code?.coding?.[0]?.display || "";
+                const val = comp.valueQuantity?.value ?? "-";
+                const unit = comp.valueQuantity?.unit ?? "";
 
                 if (compName.toLowerCase().includes("systolic")) {
-                    sys = comp.valueQuantity?.value ?? "-";
-                    sysUom = comp.valueQuantity?.unit ?? "";
+                    sys = val;
+                    sysUom = unit;
+                    rawComponents.push({ name: "Systolic", code: comp.code?.coding?.[0]?.code || "8480-6", value: val, unit: unit });
                 } else if (compName.toLowerCase().includes("diastolic")) {
-                    dia = comp.valueQuantity?.value ?? "-";
-                    diaUom = comp.valueQuantity?.unit ?? "";
+                    dia = val;
+                    diaUom = unit;
+                    rawComponents.push({ name: "Diastolic", code: comp.code?.coding?.[0]?.code || "8462-4", value: val, unit: unit });
                 }
             });
 
             value = `${sys} / ${dia}`;
-            uom = sysUom || diaUom; // They usually share the same UoM (mm[Hg])
+            uom = sysUom || diaUom;
         }
         else {
             // Generic fallback for any other multi-component observations
-            // Formats like: "Part A: 5 mg | Part B: 10 mg"
-            const compStrings = resource.component.map(comp => {
+            resource.component.forEach(comp => {
                 const cName = comp.code?.text || comp.code?.coding?.[0]?.display || "Component";
-                let cVal = comp.valueQuantity?.value || comp.valueCodeableConcept?.text || comp.valueString || "-";
-                let cUom = comp.valueQuantity?.unit || "";
-                return `${cName}: ${cVal} ${cUom}`.trim();
+                const cVal = comp.valueQuantity ? comp.valueQuantity.value : (comp.valueString || "-");
+                const cUom = comp.valueQuantity ? (comp.valueQuantity.unit || "") : "";
+
+                rawComponents.push({ name: cName, code: comp.code?.coding?.[0]?.code || "", value: cVal, unit: cUom });
             });
-            value = compStrings.join(" | ");
+
+            value = rawComponents.map(p => p.value).join(" / ");
+            uom = rawComponents[0]?.unit || "";
         }
     }
 
-    return {
+    const retValue = {
         name: obsName,
         code: obsCode,
         value: String(value).trim(),
         uom: uom,
-        obsDate: obsDate
+        obsDate: obsDate,
+        entryType: entryType,
+        components: rawComponents
     };
+
+
+    debug("current : " + JSON.stringify(retValue));
+
+    debug("new : " + JSON.stringify(await extractObservationDetailsNew(resource)));
+
+    return retValue;
+
+}
+
+async function extractObservationDetailsNew(resource) {
+
+    const config = await getConfig();
+    const HEADER_LOINCS = config.loinc_config.header_codes_to_ignore.map(c => c.code);
+
+    // get the best possible LOINC codes 
+
+    //const getLoinc = (coding) => coding?.find(c => c.system === "http://loinc.org")?.code || "";
+    const getBestLoincNotWorking = (coding) => {
+        const loincs = coding?.filter(c => c.system === "http://loinc.org").map(c => c.code) || [];
+        const validCodes = loincs.filter(code => !HEADER_LOINCS.includes(code));    // Filter out the headers
+        if (validCodes.includes("59408-5")) return "59408-5";   // Prioritize Pulse Ox specifically if multiple exist - SPECIAL CASE
+        return validCodes[0] || loincs[0] || "";
+    };
+
+    const getBestLoinc = (coding) => {
+        // 1. Get all LOINC codes from the resource
+        const loincs = coding?.filter(c => c.system === "http://loinc.org").map(c => c.code) || [];
+        if (loincs.length === 0) return "";
+
+        // 2. Filter out the headers (8716-3, etc.)
+        const validCodes = loincs.filter(code => !HEADER_LOINCS.includes(code));
+
+        // 3. Logic Check:
+        // If we found specific codes (like 8867-4), return the first one.
+        if (validCodes.length > 0) {
+            // Handle the SpO2 special case within the valid codes
+            if (validCodes.includes("59408-5")) return "59408-5";
+            return validCodes[0];
+        }
+
+        // 4. Fallback: If ONLY headers were present, return the first header
+        return loincs[0];
+    };
+
+    // get the observation date
+    const obsDate = resource.effectiveDateTime || resource.effectivePeriod?.start || resource.issued || null;
+
+    // extract the top-level value[x] / dataType
+    if (resource.valueQuantity) {
+        entryType = "quantity";
+    }
+    else if (resource.valueCodeableConcept) {
+        entryType = "codeableconcept";
+    }
+    else if (resource.valueString !== undefined) {
+        // ??? let's default everything else to string for now!!!
+        entryType = "string";
+    } else if (resource.component && resource.component.length > 0) {
+        entryType = "component";
+    }
+
+    // create the base result object 
+    const result = {
+        name: resource.code?.text || "Observation",
+        loinc: getBestLoinc(resource.code?.coding),
+        obsDate: obsDate,
+        entryType: entryType,
+        measurements: [],
+        displayValue: "", // The "Friendly" string
+        uom: "",          // Primary unit
+        resource: resource  // original resource received from FHIR server
+    };
+
+    // 1. Logic for Panels (Blood Pressure, etc.)
+    if (resource.component && resource.component.length > 0) {
+        resource.component.forEach(comp => {
+            result.measurements.push({
+                name: comp.code?.text || "Component",
+                loinc: getBestLoinc(comp.code?.coding),
+                value: comp.valueQuantity?.value ?? null,
+                unit: comp.valueQuantity?.unit || ""
+            });
+        });
+
+        const bpOrder = config.loinc_config.bp_display_order;   // special case for BP handling
+        result.measurements.sort((a, b) => (bpOrder[a.loinc] || 99) - (bpOrder[b.loinc] || 99));
+
+        // Create the "Display String" for panels (e.g., "120 / 80")
+        result.displayValue = result.measurements.map(m => m.value ?? "-").join(" / ");
+        result.uom = result.measurements[0]?.unit || "";
+    }
+    // 2. Logic for Single Vitals (Weight, SpO2)
+    else {
+        const val = resource.valueQuantity?.value ?? resource.valueString ?? "-";
+        const unit = resource.valueQuantity?.unit || "";
+
+        result.measurements.push({
+            name: result.name,
+            loinc: result.loinc,
+            value: val,
+            unit: unit
+        });
+
+        result.displayValue = String(val);
+        result.uom = unit;
+    }
+
+    return result;
 }
 
 function createObservationTable(dataArray) {
@@ -1095,7 +1357,7 @@ async function loadLabObservations(client, patientId) {
     debug("entering loadLabObservations...");
 
     await client.request(`Observation?patient=${patientId}&category=laboratory`)
-        .then(bundle => {
+        .then(async (bundle) => {
 
             debug("loadLabObservations started...");
 
@@ -1110,13 +1372,13 @@ async function loadLabObservations(client, patientId) {
             const outcomes = [];
             const labResults = [];
 
-            bundle.entry?.forEach(entry => {
+            const obsPromises = bundle.entry?.map(async entry => {
 
                 const resource = entry.resource;
                 const resType = resource.resourceType;
 
                 if (resType === "Observation") {
-                    obsArray.push(extractObservationDetails(resource));
+                    obsArray.push(await extractObservationDetailsNew(resource));
                 }
 
                 if (resType === "OperationOutcome") {
@@ -1124,7 +1386,9 @@ async function loadLabObservations(client, patientId) {
                     handleOutcomes(resource, outcomes);
                 }
 
-            });
+            }) || [];
+
+            await Promise.all(obsPromises);
 
             const topNLabArr = filterTopNObservations(obsArray, 5);
 
@@ -1135,12 +1399,12 @@ async function loadLabObservations(client, patientId) {
                     li.textContent = `${item.name}: `;
                     const span = document.createElement('span');
                     span.className = 'font-bold';
-                    span.textContent = `${item.value} ${item.uom}`;
+                    span.textContent = `${item.displayValue} ${item.uom}`;
                     li.appendChild(span);
                     list.appendChild(li);
 
                     lastLab = item.name.trim().toLowerCase();
-                    labResults.push({ name: item.name, value: item.value });
+                    labResults.push({ name: item.name, value: item.displayValue });
                 }
             });
 
@@ -1157,11 +1421,11 @@ async function loadLabObservations(client, patientId) {
                     recentLabsDetails.className = "group mt-4";
 
                     recentLabsDetails.innerHTML = `
-                        <summary class="ml-6 pl-4 font-normal cursor-pointer list-none flex items-center">
-                            Last 5 Reports for all Lab Results <span class="ml-2 transition-transform group-open:rotate-180">▼</span>
-                        </summary>
-                        <div id="labs-table" class="mt-2 text-gray-800"></div>
-                    `;
+                    <summary class="ml-6 pl-4 font-normal cursor-pointer list-none flex items-center">
+                        Last 5 Reports for all Lab Results <span class="ml-2 transition-transform group-open:rotate-180">▼</span>
+                    </summary>
+                    <div id="labs-table" class="mt-2 text-gray-800"></div>
+                `;
                     const outcomesDiv = document.getElementById("labrequest-outcomes");
                     outcomesDiv.parentNode.insertBefore(recentLabsDetails, outcomesDiv);
                     labsTblContainer = document.getElementById("labs-table");
@@ -1206,8 +1470,12 @@ async function loadVitals(client, patientId) {
 
     debug("entering loadVitals...");
 
+    if (isEhrLaunch) {
+        document.getElementById("global-record-btn").classList.remove("hidden");
+    }
+
     await client.request(`Observation?patient=${patientId}&category=vital-signs`)
-        .then(bundle => {
+        .then(async (bundle) => {
 
             debug("loadVitals started ...");
 
@@ -1226,13 +1494,13 @@ async function loadVitals(client, patientId) {
 
             const vitals = [];
 
-            bundle.entry?.forEach(entry => {
+            const obsPromises = bundle.entry?.map(async entry => {
 
                 const resource = entry.resource;
                 const resType = resource.resourceType;
 
                 if (resType === "Observation") {
-                    obsArray.push(extractObservationDetails(resource));
+                    obsArray.push(await extractObservationDetailsNew(resource));
                 }
 
                 if (resType === "OperationOutcome") {
@@ -1240,38 +1508,66 @@ async function loadVitals(client, patientId) {
                     handleOutcomes(resource, outcomes);
                 }
 
-            });
+            }) || [];
+
+            await Promise.all(obsPromises);
 
             const topNVitalsArr = filterTopNObservations(obsArray, 5);
+
+            // Populate global_dict with UNIQUE observation types discovered (for the Record dropdown)
+            const uniqueVitals = [];
+            const seenCodes = new Set();
+            obsArray.forEach(item => {
+                if (item.code && !seenCodes.has(item.code)) {
+                    seenCodes.add(item.code);
+                    uniqueVitals.push(item);
+                }
+            });
+            global_dict.vitals = uniqueVitals;
 
             let lastVital = "";
             topNVitalsArr.forEach(item => {
                 if (isNullOrEmpty(lastVital) || lastVital.trim().toLowerCase() !== item.name.trim().toLowerCase()) {
 
+                    let panelSubCode = "";
+                    if (item.measurements && item.measurements.length > 1) {
+                        panelSubCode = " [" + item.measurements.map(m => m.loinc).join(", ") + "]";
+                    }
+
                     //debug(`last vital : [${lastVital}] new [${item.name}]`);
-                    const codeBadge = item.code ? `<span class="obs-code hidden inline text-[10px] text-blue-600 font-mono bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">[${item.code}]</span> ` : "";
+                    const codeBadge = item.loinc ? `<span class="obs-code hidden inline text-[10px] text-blue-600 font-mono bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">[${item.loinc + panelSubCode}]</span> ` : "";
 
                     const li = document.createElement("li");
                     li.className = "flex flex-col p-3 mb-3 bg-white border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-shadow group";
 
                     li.innerHTML = `
+                    <div class="vitals-card-content flex flex-col w-full">
                         <div class="flex justify-between items-start w-full">
                             <div class="flex flex-row items-center">
                                 ${codeBadge}&nbsp;<span class="inline text-sm font-semibold text-gray-800">${item.name}</span>
+                                <div class="ml-1 text-xs text-gray-400">
+                                    ${formatDateTime(item.obsDate)}
+                                </div>
                             </div>
-                            <!-- Future Edit Button 
-                            <button class="opacity-0 group-hover:opacity-100 text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-all">
-                                Edit
+                            <!-- hiding this fella temporarily -->
+                            <button class="${isEhrLaunch ? "hidden" : "hidden"} record-new-btn opacity-0 group-hover:opacity-100 text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-all">
+                                Record New
                             </button>
-                            -->
                         </div>
-                        <div class="flex justify-between items-end mt-1 w-full relative">
+                        <div class="vitals-display-area flex justify-between items-end mt-1 w-full relative">
                             <div class="text-xl font-bold text-blue-900">
-                                ${item.value} <span class="text-sm font-medium text-gray-500 ml-1">${item.uom}</span>
+                                ${item.displayValue} <span class="text-sm font-medium text-gray-500 ml-1">${item.uom}</span>
                             </div>
-                            <!-- Future Submit/Cancel container would map here via JS relative positioning -->
                         </div>
-                    `;
+                        <div class="vitals-edit-area hidden mt-2 pt-2 border-t border-gray-100">
+                            <!-- Form will be injected here -->
+                        </div>
+                    </div>
+                `;
+
+                    li.querySelector(".record-new-btn").addEventListener("click", () => {
+                        toggleVitalsEditMode(li, item);
+                    });
 
                     list.appendChild(li);
 
@@ -1279,10 +1575,6 @@ async function loadVitals(client, patientId) {
                     vitals.push(item);
                 }
             });
-
-            if (vitals.length > 0) {
-                global_dict.vitals = vitals;
-            }
 
             if (topNVitalsArr.length > 0) {
                 vitalsTbl.appendChild(createObservationTable(topNVitalsArr));
@@ -1313,6 +1605,662 @@ async function loadVitals(client, patientId) {
     debug("exiting loadVitals!");
 }
 
+// ==========================
+// VITALS ENTRY UI LOGIC
+// ==========================
+
+function toggleVitalsEditModeOld(cardLi, item, isGlobal = false) {
+    const displayArea = cardLi.querySelector(".vitals-display-area");
+    const editArea = cardLi.querySelector(".vitals-edit-area");
+    const recordBtn = cardLi.querySelector(".record-new-btn");
+
+    if (!editArea) return;
+
+    // Toggle Visibility
+    displayArea?.classList.add("hidden");
+    recordBtn?.classList.add("hidden");
+    editArea.classList.remove("hidden");
+
+    // Clear and Render Form
+    editArea.innerHTML = "";
+
+    // Header for the form
+    const header = document.createElement("div");
+    header.className = "text-xs font-bold text-blue-600 uppercase tracking-wider mb-2";
+    header.textContent = `Recording New Entry: ${item.name}`;
+    editArea.appendChild(header);
+
+    const form = document.createElement("div");
+    form.className = "space-y-3";
+
+    // 1. Inputs based on type
+    if (item.entryType === "component" && item.measurements?.length > 0) {
+        // Multi-field entry (e.g. Blood Pressure)
+        const row = document.createElement("div");
+        row.className = "flex items-center gap-2";
+
+        item.measurements.forEach((comp, idx) => {
+            const group = document.createElement("div");
+            group.className = "flex-1";
+            group.innerHTML = `
+            <label class="block text-[10px] text-gray-500 mb-0.5">${comp.name}</label>
+            <input type="number" class="w-full p-1.5 border border-gray-300 rounded text-sm focus:ring-1 focus:ring-blue-500 outline-none" placeholder="${comp.value}">
+        `;
+            row.appendChild(group);
+
+            if (idx < item.measurements.length - 1) {
+                const separator = document.createElement("span");
+                separator.className = "text-gray-400 mt-4";
+                separator.textContent = "/";
+                row.appendChild(separator);
+            }
+        });
+
+        // Shared UOM for components
+        const uomGroup = document.createElement("div");
+        uomGroup.className = "w-20";
+        uomGroup.innerHTML = `
+        <label class="block text-[10px] text-gray-500 mb-0.5">Unit</label>
+        <input type="text" value="${item.uom}" class="w-full p-1.5 border border-gray-300 rounded text-sm bg-gray-50 italic outline-none">
+    `;
+        row.appendChild(uomGroup);
+        form.appendChild(row);
+
+    } else {
+        // Single field entry
+        const row = document.createElement("div");
+        row.className = "flex items-center gap-2";
+
+        const valGroup = document.createElement("div");
+        valGroup.className = "flex-1";
+        const placeholder = (item.entryType === "quantity") ? item.value : "Enter value...";
+        const inputType = (item.entryType === "quantity") ? "number" : "text";
+
+        valGroup.innerHTML = `
+        <label class="block text-[10px] text-gray-500 mb-0.5">Value</label>
+        <input type="${inputType}" class="w-full p-1.5 border border-gray-300 rounded text-sm focus:ring-1 focus:ring-blue-500 outline-none" placeholder="${placeholder}">
+    `;
+        row.appendChild(valGroup);
+
+        const uomGroup = document.createElement("div");
+        uomGroup.className = "w-24";
+        uomGroup.innerHTML = `
+        <label class="block text-[10px] text-gray-500 mb-0.5">Unit</label>
+        <input type="text" value="${item.uom}" class="w-full p-1.5 border border-gray-300 rounded text-sm bg-gray-50 italic outline-none">
+    `;
+        row.appendChild(uomGroup);
+        form.appendChild(row);
+    }
+
+    // 2. Action Buttons
+    const footer = document.createElement("div");
+    footer.className = "flex justify-end gap-2 mt-4 pt-2 border-t border-gray-50";
+    footer.innerHTML = `
+    <button class="cancel-entry-btn px-3 py-1 text-xs text-gray-500 hover:text-gray-700 font-medium">Cancel</button>
+    <button class="save-entry-btn px-4 py-1 bg-blue-600 text-white text-xs font-semibold rounded hover:bg-blue-700 shadow-sm transition-colors">Save Observation</button>
+    `;
+
+    footer.querySelector(".cancel-entry-btn").addEventListener("click", () => {
+        if (isGlobal) {
+            cardLi.remove();
+        } else {
+            editArea.classList.add("hidden");
+            displayArea?.classList.remove("hidden");
+            recordBtn?.classList.remove("hidden");
+        }
+    });
+
+    footer.querySelector(".save-entry-btn").addEventListener("click", () => {
+        debug(`[STUB] Saving new ${item.name} observation for patient...`);
+        alert("Stub: Saving observation data (to be implemented)");
+        // Logic to revert or close will go here after actual POST
+    });
+
+    editArea.appendChild(form);
+    editArea.appendChild(footer);
+}
+
+function toggleVitalsEditModeInline(cardLi, item, isGlobal = false) {
+    const displayArea = cardLi.querySelector(".vitals-display-area");
+    const editArea = cardLi.querySelector(".vitals-edit-area");
+    const recordBtn = cardLi.querySelector(".record-new-btn");
+
+    if (!editArea) return;
+
+    // --- ADDED: Array to hold references to the input elements ---
+    const inputRefs = [];
+
+    // Toggle Visibility
+    displayArea?.classList.add("hidden");
+    recordBtn?.classList.add("hidden");
+    editArea.classList.remove("hidden");
+
+    // Clear and Render Form
+    editArea.innerHTML = "";
+
+    // Header for the form
+    const header = document.createElement("div");
+    header.className = "text-xs font-bold text-blue-600 uppercase tracking-wider mb-2";
+    header.textContent = `Recording New Entry: ${item.name}`;
+    editArea.appendChild(header);
+
+    const form = document.createElement("div");
+    form.className = "space-y-3";
+
+    // 1. Inputs based on type
+    if (item.entryType === "component" && item.measurements?.length > 0) {
+        // Multi-field entry (e.g. Blood Pressure)
+        const row = document.createElement("div");
+        row.className = "flex items-center gap-2";
+
+        item.measurements.forEach((comp, idx) => {
+            const group = document.createElement("div");
+            group.className = "flex-1";
+            group.innerHTML = `
+            <label class="block text-[10px] text-gray-500 mb-0.5">${comp.name}</label>
+            <input type="number" class="w-full p-1.5 border border-gray-300 rounded text-sm focus:ring-1 focus:ring-blue-500 outline-none" placeholder="${comp.value}">
+        `;
+
+            // --- ADDED: Capture reference for multi-field component ---
+            const inputEl = group.querySelector('input');
+            inputRefs.push({ name: comp.name, el: inputEl, loinc: comp.loinc }); // Storing name and loinc for context
+
+            row.appendChild(group);
+
+            if (idx < item.measurements.length - 1) {
+                const separator = document.createElement("span");
+                separator.className = "text-gray-400 mt-4";
+                separator.textContent = "/";
+                row.appendChild(separator);
+            }
+        });
+
+        // Shared UOM for components
+        const uomGroup = document.createElement("div");
+        uomGroup.className = "w-20";
+        uomGroup.innerHTML = `
+        <label class="block text-[10px] text-gray-500 mb-0.5">Unit</label>
+        <input type="text" value="${item.uom}" class="w-full p-1.5 border border-gray-300 rounded text-sm bg-gray-50 italic outline-none">
+    `;
+        row.appendChild(uomGroup);
+        form.appendChild(row);
+
+    } else {
+        // Single field entry
+        const row = document.createElement("div");
+        row.className = "flex items-center gap-2";
+
+        const valGroup = document.createElement("div");
+        valGroup.className = "flex-1";
+        const placeholder = (item.entryType === "quantity") ? item.value : "Enter value...";
+        const inputType = (item.entryType === "quantity") ? "number" : "text";
+
+        valGroup.innerHTML = `
+        <label class="block text-[10px] text-gray-500 mb-0.5">Value</label>
+        <input type="${inputType}" class="w-full p-1.5 border border-gray-300 rounded text-sm focus:ring-1 focus:ring-blue-500 outline-none" placeholder="${placeholder}">
+    `;
+
+        // --- ADDED: Capture reference for single field ---
+        const inputEl = valGroup.querySelector('input');
+        inputRefs.push({ name: item.name, el: inputEl, loinc: item.loinc });
+
+        row.appendChild(valGroup);
+
+        const uomGroup = document.createElement("div");
+        uomGroup.className = "w-24";
+        uomGroup.innerHTML = `
+        <label class="block text-[10px] text-gray-500 mb-0.5">Unit</label>
+        <input type="text" value="${item.uom}" class="w-full p-1.5 border border-gray-300 rounded text-sm bg-gray-50 italic outline-none">
+    `;
+        row.appendChild(uomGroup);
+        form.appendChild(row);
+    }
+
+    // 2. Action Buttons
+    const footer = document.createElement("div");
+    footer.className = "flex justify-end gap-2 mt-4 pt-2 border-t border-gray-50";
+    footer.innerHTML = `
+    <button class="cancel-entry-btn px-3 py-1 text-xs text-gray-500 hover:text-gray-700 font-medium">Cancel</button>
+    <button class="save-entry-btn px-4 py-1 bg-blue-600 text-white text-xs font-semibold rounded hover:bg-blue-700 shadow-sm transition-colors">Save Observation</button>
+`;
+
+    footer.querySelector(".cancel-entry-btn").addEventListener("click", () => {
+        if (isGlobal) {
+            cardLi.remove();
+        } else {
+            editArea.classList.add("hidden");
+            displayArea?.classList.remove("hidden");
+            recordBtn?.classList.remove("hidden");
+        }
+    });
+
+    footer.querySelector(".save-entry-btn").addEventListener("click", async () => {
+
+        // VALIDATE - to ensure all fields are selected!
+        const hasData = inputRefs.every(ref => ref.el.value.trim() !== "");
+
+        if (!hasData) {
+            //alert("Please enter a value before saving.");
+            // Find the first ref where the element value is empty
+            const firstEmpty = inputRefs.find(ref => ref.el.value.trim() === "");
+
+            if (firstEmpty) {
+                firstEmpty.el.focus();
+                // Optional: add a temporary red border
+                firstEmpty.el.style.borderColor = "red";
+                setTimeout(() => firstEmpty.el.style.borderColor = "", 2000);
+            }
+
+            return; // Stop the save process
+        }
+
+        // --- ADDED: Logic to extract data from inputRefs ---
+        const submissionData = {
+            main_loinc: item.loinc,
+            timestamp: new Date().toISOString(),
+            values: inputRefs.map(ref => ({
+                component: ref.name,
+                loinc: ref.loinc,
+                value: ref.el.value,
+                item: item
+            }))
+        };
+
+        console.log(`[SAVING] ${item.name}:`, submissionData);
+
+        // Call createObservation
+        await createObservation(submissionData);
+
+        console.log(`Saved ${item.name} values: ` + submissionData.values.map(v => `${v.component}: ${v.value}, ${v.item.uom}, ${v.item.name}`).join(", "));
+
+        // Example logic to revert UI after save
+        if (!isGlobal) {
+            editArea.classList.add("hidden");
+            displayArea?.classList.remove("hidden");
+            recordBtn?.classList.remove("hidden");
+        }
+    });
+
+    editArea.appendChild(form);
+    editArea.appendChild(footer);
+
+    // wire-up validation for the form to enable/disable the Save button
+    const saveBtn = footer.querySelector(".save-entry-btn");
+    saveBtn.disabled = true; // Initially disabled
+    saveBtn.classList.add("opacity-50", "cursor-not-allowed"); // Optional: styling
+
+    const inputs = editArea.querySelectorAll("input");
+
+    inputs.forEach(input => {
+        input.addEventListener("input", () => {
+            const hasData = inputRefs.every(ref => ref.el.value.trim() !== "");
+            saveBtn.disabled = !hasData;
+            if (hasData) {
+                saveBtn.classList.remove("opacity-50", "cursor-not-allowed");
+            } else {
+                saveBtn.classList.add("opacity-50", "cursor-not-allowed");
+            }
+        });
+    });
+
+}
+
+function globalAddVitals(cardLi, item, isGlobal = false) {
+    const displayArea = cardLi.querySelector(".vitals-display-area");
+    const editArea = cardLi.querySelector(".vitals-edit-area");
+    const recordBtn = cardLi.querySelector(".record-new-btn");
+
+    if (!editArea) return;
+
+    // --- ADDED: Array to hold references to the input elements ---
+    const inputRefs = [];
+
+    // Toggle Visibility
+    displayArea?.classList.add("hidden");
+    recordBtn?.classList.add("hidden");
+    editArea.classList.remove("hidden");
+
+    // Clear and Render Form
+    editArea.innerHTML = "";
+
+    // Header for the form
+    const header = document.createElement("div");
+    header.className = "text-xs font-bold text-blue-600 uppercase tracking-wider mb-2";
+    header.textContent = `Recording New Entry: ${item.vital_sign}`;
+    editArea.appendChild(header);
+
+    const form = document.createElement("div");
+    form.className = "space-y-3";
+
+    // 1. Inputs based on type
+    if (item.entry_type === "codeableconcept") {
+        // Multi-field entry (e.g. Blood Pressure)
+        const row = document.createElement("div");
+        row.className = "flex items-center gap-2";
+
+        item.components.forEach((comp, idx) => {
+            const group = document.createElement("div");
+            group.className = "flex-1";
+            group.innerHTML = `
+            <label class="block text-[10px] text-gray-500 mb-0.5">${comp.vital_sign}</label>
+            <input type="number" class="w-full p-1.5 border border-gray-300 rounded text-sm focus:ring-1 focus:ring-blue-500 outline-none" placeholder="Enter Value">
+        `;
+
+            // --- ADDED: Capture reference for multi-field component ---
+            const inputEl = group.querySelector('input');
+            inputRefs.push({ obs_name: comp.vital_sign, obs_input_element: inputEl, obs_loinc_code: comp.loinc_code, obs_uom: comp.uom[0] }); // Storing name and loinc for context panel_loinc: item.loinc_code, panel_name: item.vital_sign
+
+            row.appendChild(group);
+
+            if (idx < item.components.length - 1) {
+                const separator = document.createElement("span");
+                separator.className = "text-gray-400 mt-4";
+                separator.textContent = "/";
+                row.appendChild(separator);
+            }
+        });
+
+        // Shared UOM for components
+        const uomGroup = document.createElement("div");
+        uomGroup.className = "w-20";
+        uomGroup.innerHTML = `
+        <label class="block text-[10px] text-gray-500 mb-0.5">Unit</label>
+        <input type="text" value="${item.components[0].uom[0]}" class="w-full p-1.5 border border-gray-300 rounded text-sm bg-gray-50 italic outline-none">
+    `;
+        row.appendChild(uomGroup);
+        form.appendChild(row);
+
+    } else {
+        // Single field entry // Simple Type
+        const row = document.createElement("div");
+        row.className = "flex items-center gap-2";
+
+        const valGroup = document.createElement("div");
+        valGroup.className = "flex-1";
+        //const placeholder = (item.entry_type === "quantity") ? item.value : "Enter value...";
+        const placeholder = "Enter value...";
+        const inputType = (item.entry_type === "quantity") ? "number" : "text";
+
+        valGroup.innerHTML = `
+        <label class="block text-[10px] text-gray-500 mb-0.5">Value</label>
+        <input type="${inputType}" class="w-full p-1.5 border border-gray-300 rounded text-sm focus:ring-1 focus:ring-blue-500 outline-none" placeholder="${placeholder}">
+    `;
+
+        // --- ADDED: Capture reference for single field ---
+        const inputEl = valGroup.querySelector('input');
+        inputRefs.push({ obs_name: item.vital_sign, obs_input_element: inputEl, obs_loinc_code: item.loinc_code, obs_uom: item.uom[0] });
+
+        row.appendChild(valGroup);
+
+        const uomGroup = document.createElement("div");
+        uomGroup.className = "w-24";
+        uomGroup.innerHTML = `
+        <label class="block text-[10px] text-gray-500 mb-0.5">Unit</label>
+        <input type="text" value="${item.uom[0]}" class="w-full p-1.5 border border-gray-300 rounded text-sm bg-gray-50 italic outline-none">
+    `;
+        row.appendChild(uomGroup);
+        form.appendChild(row);
+    }
+
+    // 2. Action Buttons
+    const footer = document.createElement("div");
+    footer.className = "flex justify-end gap-2 mt-4 pt-2 border-t border-gray-50";
+    footer.innerHTML = `
+    <button class="cancel-entry-btn px-3 py-1 text-xs text-gray-500 hover:text-gray-700 font-medium">Cancel</button>
+    <button class="save-entry-btn px-4 py-1 bg-blue-600 text-white text-xs font-semibold rounded hover:bg-blue-700 shadow-sm transition-colors">Save Observation</button>
+`;
+
+    footer.querySelector(".cancel-entry-btn").addEventListener("click", () => {
+        if (isGlobal) {
+            cardLi.remove();
+        } else {
+            editArea.classList.add("hidden");
+            displayArea?.classList.remove("hidden");
+            recordBtn?.classList.remove("hidden");
+        }
+    });
+
+    footer.querySelector(".save-entry-btn").addEventListener("click", async () => {
+
+        // VALIDATE - to ensure all fields are selected!
+        const hasData = inputRefs.every(ref => ref.obs_input_element.value.trim() !== "");
+
+        if (!hasData) {
+            //alert("Please enter a value before saving.");
+            // Find the first ref where the element value is empty
+            const firstEmpty = inputRefs.find(ref => ref.obs_input_element.value.trim() === "");
+
+            if (firstEmpty) {
+                firstEmpty.obs_input_element.focus();
+                // Optional: add a temporary red border
+                firstEmpty.obs_input_element.style.borderColor = "red";
+                setTimeout(() => firstEmpty.obs_input_element.style.borderColor = "", 2000);
+            }
+
+            return; // Stop the save process
+        }
+
+        // --- ADDED: Logic to extract data from inputRefs ---
+        const submissionData = {
+            main_loinc_code: item.loinc_code,
+            obs_display_name: item.vital_sign,
+            obs_timestamp: new Date().toISOString(),
+            values: inputRefs.map(ref => ({
+                vital_sign: ref.obs_name,
+                loinc_code: ref.obs_loinc_code,
+                value: ref.obs_input_element.value,
+                uom: ref.obs_uom
+            }))
+        };
+
+        console.log(`[SAVING] ${item.name}:`, submissionData);
+
+        // Call createObservation
+        await createObservation(submissionData);
+
+        console.log(`Saved ${item.name} values: ` + submissionData.values.map(v => `${v.vital_sign}: ${v.value}, ${v.uom}, [${v.loinc_code}]`).join(", "));
+
+        // Example logic to revert UI after save
+        if (!isGlobal) {
+            editArea.classList.add("hidden");
+            displayArea?.classList.remove("hidden");
+            recordBtn?.classList.remove("hidden");
+        }
+    });
+
+    editArea.appendChild(form);
+    editArea.appendChild(footer);
+
+    // wire-up validation for the form to enable/disable the Save button
+    const saveBtn = footer.querySelector(".save-entry-btn");
+    saveBtn.disabled = true; // Initially disabled
+    saveBtn.classList.add("opacity-50", "cursor-not-allowed"); // Optional: styling
+
+    const inputs = editArea.querySelectorAll("input");
+
+    inputs.forEach(input => {
+        input.addEventListener("input", () => {
+            const hasData = inputRefs.every(ref => ref.obs_input_element.value.trim() !== "");
+            saveBtn.disabled = !hasData;
+            if (hasData) {
+                saveBtn.classList.remove("opacity-50", "cursor-not-allowed");
+            } else {
+                saveBtn.classList.add("opacity-50", "cursor-not-allowed");
+            }
+        });
+    });
+
+}
+
+async function handleGlobalRecordClick() {
+    debug("Global Record clicked...");
+    const list = document.getElementById("vitals-list");
+    if (!list) return;
+
+    const config = await getConfig();
+
+    // 1. Create a "Template Select" Card at the top
+    const li = document.createElement("li");
+    li.className = "flex flex-col p-4 mb-3 bg-blue-50 border-2 border-dashed border-blue-200 rounded-xl";
+
+    // Simple placeholder for selecting a Type
+    const selectHtml = `
+    <div class="mb-4">
+        <label class="block text-xs font-bold text-blue-700 uppercase mb-2">Select Vital Type</label>
+        <select class="vitals-type-select w-full p-2 border border-blue-300 rounded-lg text-sm bg-white outline-none">
+            <option value="">-- Choose Vitals to Record --</option>
+            ${(endpointConfig.vitals_loinc_codes || []).map(v => `<option value="${v.loinc_code}">${v.vital_sign}</option>`).join('')}
+        </select>
+    </div>
+    <div class="vitals-edit-area"></div>
+    <div class="flex justify-end mt-2 card-cancel-area">
+            <button class="global-cancel-btn text-xs text-gray-500 hover:text-gray-700">Cancel</button>
+    </div>
+`;
+
+    li.innerHTML = selectHtml;
+    list.prepend(li); // Put it at the top
+
+    li.querySelector(".global-cancel-btn").addEventListener("click", () => li.remove());
+
+    li.querySelector(".vitals-type-select").addEventListener("change", function () {
+        if (!this.value) return;
+
+        // Hide cancel area once form starts
+        li.querySelector(".card-cancel-area").classList.add("hidden");
+
+        //const selectedVital = config.vitals_loinc_codes.find(v => v.loinc_code === this.value);
+        const selectedVital = endpointConfig.vitals_loinc_codes.find(v => v.loinc_code === this.value);
+        if (selectedVital) {
+            globalAddVitals(li, selectedVital, true);
+        } else {
+            // Placeholder for "New/Custom" selection
+            alert("Custom vital entry stub - please choose an existing type for now.");
+        }
+    });
+}
+
+function buildObservationFromSubmission(submissionData) {
+
+    const { main_loinc_code, obs_display_name, obs_timestamp, values } = submissionData;
+
+    //const loincCode = selectedVital ? selectedVital.code : "44484-3"; // Default to "Other" if not found
+
+    // Build the FHIR Observation Resource Base structure
+    const observation_base = {
+        "resourceType": "Observation",
+        "status": "final",
+        "category": [
+            {
+                "coding": [
+                    {
+                        "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                        "code": "vital-signs",
+                        "display": "Vital Signs"
+                    }
+                ],
+                "text": "Vital Signs"
+            }
+        ],
+        "code": {
+            "coding": [
+                {
+                    "system": "http://loinc.org",
+                    "code": main_loinc_code,
+                }
+            ],
+            "text": obs_display_name
+        },
+        "subject": {
+            "reference": `Patient/${global_dict_pii.patientId}`,
+        },
+        "effectiveDateTime": obs_timestamp,
+        "issued": new Date().toISOString(),
+        "note": [
+            {
+                "text": "captured via EHR Launch"
+            }
+        ]
+    };
+
+    let observation = observation_base;
+
+    if (values.length == 1) {
+
+        observation.valueQuantity = {
+            "value": parseFloat(values[0].value),
+            "unit": values[0].uom,
+            "system": "http://unitsofmeasure.org",
+            "code": values[0].uom
+        }
+
+    } else {
+
+        let components = [];
+
+        for (let i = 0; i < values.length; i++) {
+            const value = values[i];
+            components.push({
+                code: {
+                    coding: [
+                        {
+                            system: "http://loinc.org",
+                            code: value.loinc_code,
+                        }
+                    ],
+                    text: value.vital_sign
+                },
+                valueQuantity: {
+                    value: parseFloat(value.value),
+                    unit: value.uom,
+                    system: "http://unitsofmeasure.org",
+                    code: value.uom
+                }
+            });
+        }
+
+        observation.component = components;
+
+    }
+
+    return observation;
+}
+
+async function createObservation(submissionData) {
+    try {
+        debug("entering createObservation...");
+
+        const observation = buildObservationFromSubmission(submissionData);
+
+        await client_session.request({
+            url: "Observation",
+            method: "POST",
+            body: JSON.stringify(observation),
+            headers: {
+                "Content-Type": "application/fhir+json"
+            }
+        })
+            .then(response => {
+                debug("Observation created successfully:", JSON.stringify(response));
+                return response;
+            })
+            .catch(error => {
+                debug("createObservation failed...");
+                debug(error);
+                return null;
+            }).finally(() => {
+                debug("exiting createObservation!");
+            });
+    } catch (error) {
+        debug("createObservation failed...");
+        debug(error);
+        return null;
+    } finally {
+        debug("exiting createObservation!");
+    }
+}
+
+
 async function summarizeOld(patientInfo) {
     if (typeof window.ai === 'undefined' || !window.ai.summarizer) {
         console.warn("AI Summarizer not supported or enabled in this browser.");
@@ -1332,11 +2280,11 @@ async function summarizeOld(patientInfo) {
         document.getElementById('divAISummary').classList.remove("hidden");
 
         document.getElementById('summary-box').innerHTML = `
-                <div class="flex items-center space-x-2 animate-pulse">
-                    <div class="h-2 w-2 bg-indigo-400 rounded-full"></div>
-                    <p class="text-indigo-400 italic font-medium">Analyzing your health snapshot...</p>
-                </div>
-            `;
+            <div class="flex items-center space-x-2 animate-pulse">
+                <div class="h-2 w-2 bg-indigo-400 rounded-full"></div>
+                <p class="text-indigo-400 italic font-medium">Analyzing your health snapshot...</p>
+            </div>
+        `;
 
         const formattedData = JSON.stringify(patientInfo, null, 2);
         const prompt = `Summarize these medical results for a patient in simple terms: ${formattedData}`;
@@ -1385,13 +2333,13 @@ async function getAISummary(patientInfo) {
         container?.classList.remove("hidden");
 
         summaryBox.innerHTML = `
-            <div class="flex items-center space-x-2 animate-pulse">
-                <div class="h-2 w-2 bg-indigo-400 rounded-full"></div>
-                <p class="text-indigo-400 italic font-medium">
-                    Analyzing your health snapshot...
-                </p>
-            </div>
-        `;
+        <div class="flex items-center space-x-2 animate-pulse">
+            <div class="h-2 w-2 bg-indigo-400 rounded-full"></div>
+            <p class="text-indigo-400 italic font-medium">
+                Analyzing your health snapshot...
+            </p>
+        </div>
+    `;
 
         const formattedData = JSON.stringify(patientInfo, null, 2);
         const prompt = `Summarize these medical results for a patient in simple terms:\n${formattedData}`;
@@ -1431,10 +2379,10 @@ async function getSmartMedicalInsights(patientInfo) {
     // 1. Show container and set loading state
     container.classList.remove("hidden");
     summaryBox.innerHTML = `
-        <div class="flex items-center space-x-2 animate-pulse">
-            <div class="h-2 w-2 bg-indigo-400 rounded-full"></div>
-            <p class="text-indigo-400 italic font-medium">Analyzing your latest lab results...</p>
-        </div>`;
+    <div class="flex items-center space-x-2 animate-pulse">
+        <div class="h-2 w-2 bg-indigo-400 rounded-full"></div>
+        <p class="text-indigo-400 italic font-medium">Analyzing your latest lab results...</p>
+    </div>`;
 
     const provider = config.ai_integrations.provider;
 
