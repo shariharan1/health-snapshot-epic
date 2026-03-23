@@ -1087,7 +1087,8 @@ async function extractObservationDetailsNew(resource) {
         measurements: [],
         displayValue: "", // The "Friendly" string
         uom: "",          // Primary unit
-        resource: resource  // original resource received from FHIR server
+        resource: resource,  // original resource received from FHIR server
+        notes: []
     };
 
     // 1. Logic for Panels (Blood Pressure, etc.)
@@ -1122,6 +1123,11 @@ async function extractObservationDetailsNew(resource) {
 
         result.displayValue = String(val);
         result.uom = unit;
+    }
+
+    // 3. Extract Notes
+    if (resource.note && resource.note.length > 0) {
+        result.notes = resource.note.map(n => n.text);
     }
 
     return result;
@@ -1294,10 +1300,10 @@ async function loadMedications(client, patientId) {
                                 displayName = "Ref: " + medReference;
                             }
                         }
+                    }
 
-                        if (!isNullOrEmpty(displayName)) {
-                            medications.push(displayName);
-                        }
+                    if (!isNullOrEmpty(displayName)) {
+                        medications.push(displayName);
                     }
 
                     const li = document.createElement("li");
@@ -1330,10 +1336,13 @@ async function loadMedications(client, patientId) {
                 global_dict.medications = medications;
             }
 
-            if (bundle.total == 0) {
+            if (bundle.entry?.length == 0) {
                 const li = document.createElement("li");
                 li.textContent = `No Medications found!`;
                 list.appendChild(li);
+                document.getElementById("medications-count").textContent = "";
+            } else {
+                document.getElementById("medications-count").textContent = `(${bundle.entry?.length} entries)`;
             }
 
             if (outcomes.length > 0) {
@@ -1444,11 +1453,15 @@ async function loadLabObservations(client, patientId) {
                 global_dict.labResults = labResults;
             }
 
-            if (bundle.total == 0) {
+            if (bundle.entry?.length == 0) {
                 const li = document.createElement("li");
                 li.textContent = `No Lab observations found!`;
                 list.appendChild(li);
+                document.getElementById("lab-count").textContent = "";
+            } else {
+                document.getElementById("lab-count").textContent = `(Showing recent ${global_dict.labResults?.length} of ${bundle.entry?.length} entries)`;
             }
+
 
             if (outcomes.length > 0) {
                 displayOutcomes("labrequest-outcomes", issList, outcomes);
@@ -1523,7 +1536,7 @@ async function loadVitals(client, patientId) {
                     uniqueVitals.push(item);
                 }
             });
-            global_dict.vitals = uniqueVitals;
+            //vitals = uniqueVitals;
 
             let lastVital = "";
             topNVitalsArr.forEach(item => {
@@ -1559,6 +1572,9 @@ async function loadVitals(client, patientId) {
                                 ${item.displayValue} <span class="text-sm font-medium text-gray-500 ml-1">${item.uom}</span>
                             </div>
                         </div>
+                        <div class="text-xs text-gray-600 mt-1 flex-left">
+                            ${item.notes.length > 0 ? `<ul>${item.notes.map(note => `<li>${note}</li>`).join('')}</ul>` : ""}
+                        </div>
                         <div class="vitals-edit-area hidden mt-2 pt-2 border-t border-gray-100">
                             <!-- Form will be injected here -->
                         </div>
@@ -1581,10 +1597,17 @@ async function loadVitals(client, patientId) {
                 document.getElementById("recent-vitals").classList.remove("hidden");
             }
 
-            if (bundle.total == 0) {
+            if (vitals.length > 0) {
+                global_dict.vitals = vitals;
+            }
+
+            if (bundle.entry?.length == 0) {
                 const li = document.createElement("li");
                 li.textContent = `No Vitals found!`;
                 list.appendChild(li);
+                document.getElementById("vitals-count").textContent = "";
+            } else {
+                document.getElementById("vitals-count").textContent = `(Showing recent ${vitals?.length} of ${bundle.entry?.length} entries)`;
             }
 
             if (outcomes.length > 0) {

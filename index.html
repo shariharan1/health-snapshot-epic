@@ -150,14 +150,17 @@
             </div>
 
             <div id="divMedications">
-                <h2 class="font-semibold text-lg">Medications</h2>
+                <h2 class="font-semibold text-lg">Medications<span id="medications-count"
+                        class="text-sm text-gray-500 pl-4"></span></h2>
 
                 <div id="medicationsSpinner" class="flex items-center gap-2 text-sm text-gray-500 mt-2">
                     <div class="animate-spin h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full"></div>
                     <span>Loading Medications...</span>
                 </div>
 
-                <ul id="med-list" class="list-disc pl-5"></ul>
+                <ul id="med-list"
+                    class="list-disc pl-5 overflow-y-auto h-60 resize-y rounded has-[li]:border has-[li]:border-gray-300 has-[li]:min-h-[100px] empty:hidden">
+                </ul>
 
                 <div id="medrequest-outcomes" class="hidden">
                     <details class="group">
@@ -172,14 +175,17 @@
             </div>
 
             <div id="divLabRequest">
-                <h2 class="font-semibold text-lg">Lab Results</h2>
+                <h2 class="font-semibold text-lg">Lab Results <span id="lab-count"
+                        class="text-sm text-gray-500 pl-4"></span></h2>
 
                 <div id="labRequestsSpinner" class="flex items-center gap-2 text-sm text-gray-500 mt-2">
                     <div class="animate-spin h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full"></div>
                     <span>Loading Laboratory Requests/Results...</span>
                 </div>
 
-                <ul id="lab-list" class="list-disc pl-5"></ul>
+                <ul id="lab-list"
+                    class="list-disc pl-5 overflow-y-auto h-60 resize-y rounded has-[li]:border has-[li]:border-gray-300 has-[li]:min-h-[100px] empty:hidden">
+                </ul>
 
                 <div id="labrequest-outcomes" class="hidden">
                     <details class="group">
@@ -196,7 +202,8 @@
 
             <div id="divVitals">
                 <div class="flex justify-between items-center mb-2">
-                    <h2 class="font-semibold text-lg">Vital Signs</h2>
+                    <h2 class="font-semibold text-lg">Vital Signs <span id="vitals-count"
+                            class="text-sm text-gray-500 pl-4"></span></h2>
                     <button id="global-record-btn"
                         class="hidden flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg text-sm font-medium border border-blue-200 transition-colors">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
