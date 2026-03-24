@@ -1551,6 +1551,7 @@ async function loadVitals(client, patientId) {
                     const codeBadge = item.loinc ? `<span class="obs-code hidden inline text-[10px] text-blue-600 font-mono bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">[${item.loinc + panelSubCode}]</span> ` : "";
 
                     const li = document.createElement("li");
+                    li.setAttribute("data-vital-name", item.name.trim().toLowerCase());
                     li.className = "flex flex-col p-3 mb-3 bg-white border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-shadow group";
 
                     li.innerHTML = `
@@ -1582,7 +1583,7 @@ async function loadVitals(client, patientId) {
                 `;
 
                     li.querySelector(".record-new-btn").addEventListener("click", () => {
-                        toggleVitalsEditMode(li, item);
+                        toggleVitalsEditModeInline(li, item);
                     });
 
                     list.appendChild(li);
@@ -1879,30 +1880,128 @@ function toggleVitalsEditModeInline(cardLi, item, isGlobal = false) {
 
         // --- ADDED: Logic to extract data from inputRefs ---
         const submissionData = {
-            main_loinc: item.loinc,
-            timestamp: new Date().toISOString(),
+            main_loinc_code: item.loinc,
+            obs_display_name: item.name,
+            obs_timestamp: new Date().toISOString(),
+            // Assuming we add a notes input in the next step or keep it as empty if not present
+            notes: footer.querySelector('input[type="text"]')?.value || "",
             values: inputRefs.map(ref => ({
-                component: ref.name,
-                loinc: ref.loinc,
+                vital_sign: ref.name,
+                loinc_code: ref.loinc,
                 value: ref.el.value,
-                item: item
+                uom: item.uom
             }))
         };
 
-        console.log(`[SAVING] ${item.name}:`, submissionData);
+        const saveBtn = footer.querySelector(".save-entry-btn");
+        const cancelBtn = footer.querySelector(".cancel-entry-btn");
+        const originalBtnText = saveBtn.textContent;
+        const errorContainer = document.createElement("div");
+        errorContainer.className = "text-xs text-red-600 mt-2 bg-red-50 p-2 rounded border border-red-100 hidden";
+        editArea.appendChild(errorContainer);
 
-        // Call createObservation
-        await createObservation(submissionData);
+        try {
+            // "Saving..." State
+            saveBtn.disabled = true;
+            cancelBtn.disabled = true;
+            saveBtn.innerHTML = `<span class="inline-block animate-spin mr-1">⌛</span> Saving...`;
+            errorContainer.classList.add("hidden");
 
-        console.log(`Saved ${item.name} values: ` + submissionData.values.map(v => `${v.component}: ${v.value}, ${v.item.uom}, ${v.item.name}`).join(", "));
+            // Disable all inputs in the form
+            const allInputs = editArea.querySelectorAll("input");
+            allInputs.forEach(input => input.disabled = true);
 
-        // Example logic to revert UI after save
-        if (!isGlobal) {
+            console.log(`[SAVING INLINE] ${item.name}:`, submissionData);
+
+            // Call createObservation
+            const response = await createObservation(submissionData);
+
+            // SUCCESS
+            if (response) {
+                debug("POST Response: " + JSON.stringify(response)); // Log full response object (if not too big)
+
+                let newResource = null;
+
+                // 1. Try to get resource from body (some servers return it on POST)
+                if (response.body && response.body.resourceType === "Observation") {
+                    debug("New resource found in response body");
+                    newResource = response.body;
+                }
+                // 2. Fallback to Location header
+                else if (response.headers) {
+                    // Handle different header implementations (Headers object or plain object)
+                    let location = null;
+                    if (typeof response.headers.get === 'function') {
+                        location = response.headers.get("Location") || response.headers.get("location");
+                    } else {
+                        location = response.headers["Location"] || response.headers["location"];
+                    }
+
+                    if (location) {
+                        debug("Fetching new Observation from Location: " + location);
+                        try {
+                            newResource = await client_session.request(location);
+                            debug("Resource fetched from Location successfully");
+                        } catch (fetchErr) {
+                            console.error("Failed to fetch new resource from Location:", fetchErr);
+                        }
+                    } else {
+                        debug("No Location header or resource body found in response");
+                        debug("Available Headers: " + JSON.stringify(response.headers));
+                    }
+                }
+
+                // 3. Update UI if we have a resource
+                if (newResource) {
+                    debug("Processing new resource for UI update...");
+                    const detail = await extractObservationDetailsNew(newResource);
+                    await addNewVitalToList(detail);
+                    debug("UI update completed. List child count: " + document.getElementById("vitals-list")?.children.length);
+                } else {
+                    debug("Proceeding without UI list update (no resource obtained)");
+                }
+            }
+
+            // Cleanup form
             editArea.classList.add("hidden");
             displayArea?.classList.remove("hidden");
             recordBtn?.classList.remove("hidden");
+
+        } catch (error) {
+            console.error("Save failed:", error);
+            saveBtn.disabled = false;
+            cancelBtn.disabled = false;
+            saveBtn.textContent = originalBtnText;
+
+            // Re-enable inputs
+            const allInputs = editArea.querySelectorAll("input");
+            allInputs.forEach(input => input.disabled = false);
+
+            // Show Error Inline
+            errorContainer.textContent = "Error: " + (error.message || "Failed to save observation. Please try again.");
+            errorContainer.classList.remove("hidden");
         }
     });
+
+    // Add Notes Toggle (similar to globalAddVitals for consistency)
+    const noteArea = document.createElement("div");
+    noteArea.className = "mt-3 pt-3 border-t border-gray-50";
+    noteArea.innerHTML = `
+        <input type="checkbox" id="toggle-notes-inline-${item.loinc}" class="peer hidden" />
+        <label for="toggle-notes-inline-${item.loinc}" class="text-xs text-blue-600 hover:text-blue-800 cursor-pointer font-medium peer-checked:hidden">
+            Add Notes
+        </label>
+        <div class="hidden peer-checked:flex flex-col flex-grow">
+            <div class="flex justify-between items-center mb-0.5">
+                <label class="text-[10px] text-gray-500 uppercase tracking-wider">Notes</label>
+                <label for="toggle-notes-inline-${item.loinc}" class="text-[10px] text-red-400 cursor-pointer hover:underline">Remove</label>
+            </div>
+            <input type="text" class="w-full p-1.5 border border-gray-300 rounded text-sm focus:ring-1 focus:ring-blue-500 outline-none" placeholder="Enter Notes">
+        </div>
+    `;
+
+    // Inject notes before footer
+    form.appendChild(noteArea);
 
     editArea.appendChild(form);
     editArea.appendChild(footer);
@@ -1926,6 +2025,98 @@ function toggleVitalsEditModeInline(cardLi, item, isGlobal = false) {
         });
     });
 
+}
+
+async function addNewVitalToList(item) {
+    debug("entering addNewVitalToList for: " + item.name);
+    const list = document.getElementById("vitals-list");
+    if (!list) {
+        debug("vitals-list element not found!");
+        return;
+    }
+
+    const vitalNameKey = item.name.trim().toLowerCase();
+    debug("Vital Name Key: " + vitalNameKey);
+
+    // 1. De-duplicate: Remove existing item of same type
+    const existing = list.querySelector(`li[data-vital-name="${vitalNameKey}"]`);
+    if (existing) {
+        debug("Removing existing entry for: " + vitalNameKey);
+        existing.remove();
+    }
+
+    // 2. Create New Item
+    const li = document.createElement("li");
+    li.setAttribute("data-vital-name", vitalNameKey);
+    // Add a temporary "just-saved" glow and fade out
+    li.className = "flex flex-col p-3 mb-3 bg-green-50 border border-green-200 rounded-xl shadow-md transition-all duration-1000 group relative overflow-hidden";
+
+    // Add "Saved" badge
+    const savedBadge = `<span class="absolute top-0 right-0 bg-green-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-bl-lg animate-pulse">SAVED</span>`;
+
+    let panelSubCode = "";
+    if (item.measurements && item.measurements.length > 1) {
+        panelSubCode = " [" + item.measurements.map(m => m.loinc).join(", ") + "]";
+    }
+
+    const codeBadge = item.loinc ? `<span class="obs-code hidden inline text-[10px] text-blue-600 font-mono bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">[${item.loinc + panelSubCode}]</span> ` : "";
+
+    li.innerHTML = `
+        ${savedBadge}
+        <div class="vitals-card-content flex flex-col w-full">
+            <div class="flex justify-between items-start w-full">
+                <div class="flex flex-row items-center">
+                    ${codeBadge}&nbsp;<span class="inline text-sm font-semibold text-gray-800">${item.name}</span>
+                    <div class="ml-1 text-xs text-gray-400">
+                        ${formatDateTime(item.obsDate)}
+                    </div>
+                </div>
+                <!-- Record New Button (Hidden in the newly added card initially) -->
+                <button class="record-new-btn hidden opacity-0 group-hover:opacity-100 text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-all">
+                    Record New
+                </button>
+            </div>
+            <div class="vitals-display-area flex justify-between items-end mt-1 w-full relative">
+                <div class="text-xl font-bold text-blue-900">
+                    ${item.displayValue} <span class="text-sm font-medium text-gray-500 ml-1">${item.uom}</span>
+                </div>
+            </div>
+            <div class="text-xs text-gray-600 mt-1 flex-left">
+                ${item.notes && item.notes.length > 0 ? `<ul>${item.notes.map(note => `<li>${note}</li>`).join('')}</ul>` : ""}
+            </div>
+            <div class="vitals-edit-area hidden mt-2 pt-2 border-t border-gray-100">
+                <!-- Form will be injected here -->
+            </div>
+        </div>
+    `;
+
+    // Prepend to list
+    list.prepend(li);
+
+    // Fade out the green background after a delay
+    setTimeout(() => {
+        li.classList.remove("bg-green-50", "border-green-200", "shadow-md");
+        li.classList.add("bg-white", "border-gray-200", "shadow-sm");
+        const badge = li.querySelector("span.animate-pulse");
+        if (badge) badge.remove();
+    }, 3000);
+
+    // 3. Update Global Dict
+    if (!global_dict.vitals) global_dict.vitals = [];
+    const idx = global_dict.vitals.findIndex(v => v.name.trim().toLowerCase() === vitalNameKey);
+    if (idx > -1) {
+        global_dict.vitals[idx] = item;
+    } else {
+        global_dict.vitals.unshift(item);
+    }
+
+    // 4. Update the count display if it exists
+    const countDisplay = document.getElementById("vitals-count");
+    if (countDisplay) {
+        const total = global_dict.vitals.length;
+        // Search for the original bundle length logic or just approximate
+        countDisplay.textContent = `(Showing recent ${total} entries)`;
+    }
 }
 
 function globalAddVitals(cardLi, item, isGlobal = false) {
@@ -2029,8 +2220,28 @@ function globalAddVitals(cardLi, item, isGlobal = false) {
     const footer = document.createElement("div");
     footer.className = "flex justify-end gap-2 mt-4 pt-2 border-t border-gray-50";
     footer.innerHTML = `
-    <button class="cancel-entry-btn px-3 py-1 text-xs text-gray-500 hover:text-gray-700 font-medium">Cancel</button>
-    <button class="save-entry-btn px-4 py-1 bg-blue-600 text-white text-xs font-semibold rounded hover:bg-blue-700 shadow-sm transition-colors">Save Observation</button>
+    <!-- 1. The Toggle Mechanism (Hidden Checkbox) -->
+    <input type="checkbox" id="toggle-notes" class="peer hidden" />
+
+    <!-- 2. The "Add Notes" Link (Acts as the trigger) -->
+    <label for="toggle-notes" class="text-xs text-blue-600 hover:text-blue-800 cursor-pointer font-medium peer-checked:hidden">
+        Add Notes
+    </label>
+
+    <!-- 3. The Input Group (Hidden by default, shown when peer is checked) -->
+    <div class="hidden peer-checked:flex flex-col flex-grow">
+        <div class="flex justify-between items-center mb-0.5">
+            <label class="text-[10px] text-gray-500 uppercase tracking-wider">Notes</label>
+            <!-- Optional: A way to hide it again -->
+            <label for="toggle-notes" class="text-[10px] text-red-400 cursor-pointer hover:underline">Remove</label>
+        </div>
+        <input type="text" class="w-full p-1.5 border border-gray-300 rounded text-sm focus:ring-1 focus:ring-blue-500 outline-none" placeholder="Enter Notes">
+    </div>
+
+    <div class="ml-auto flex items-center gap-2">
+        <button class="cancel-entry-btn px-3 py-1 text-xs text-gray-500 hover:text-gray-700 font-medium">Cancel</button>
+        <button class="save-entry-btn px-4 py-1 bg-blue-600 text-white text-xs font-semibold rounded hover:bg-blue-700 shadow-sm transition-colors">Save Observation</button>
+    </div>
 `;
 
     footer.querySelector(".cancel-entry-btn").addEventListener("click", () => {
@@ -2068,6 +2279,7 @@ function globalAddVitals(cardLi, item, isGlobal = false) {
             main_loinc_code: item.loinc_code,
             obs_display_name: item.vital_sign,
             obs_timestamp: new Date().toISOString(),
+            notes: footer.querySelector('input[type="text"]').value,
             values: inputRefs.map(ref => ({
                 vital_sign: ref.obs_name,
                 loinc_code: ref.obs_loinc_code,
@@ -2076,18 +2288,96 @@ function globalAddVitals(cardLi, item, isGlobal = false) {
             }))
         };
 
-        console.log(`[SAVING] ${item.name}:`, submissionData);
+        const existingError = editArea.querySelector(".text-red-600");
+        if (existingError) {
+            existingError.remove();
+        }
 
-        // Call createObservation
-        await createObservation(submissionData);
+        const saveBtn = footer.querySelector(".save-entry-btn");
+        const cancelBtn = footer.querySelector(".cancel-entry-btn");
+        const originalBtnText = saveBtn.textContent;
+        const errorContainer = document.createElement("div");
+        errorContainer.className = "text-xs text-red-600 mt-2 bg-red-50 p-2 rounded border border-red-100 hidden";
+        editArea.appendChild(errorContainer);
 
-        console.log(`Saved ${item.name} values: ` + submissionData.values.map(v => `${v.vital_sign}: ${v.value}, ${v.uom}, [${v.loinc_code}]`).join(", "));
+        try {
+            // "Saving..." State
+            saveBtn.disabled = true;
+            cancelBtn.disabled = true;
+            saveBtn.innerHTML = `<span class="inline-block animate-spin mr-1">⌛</span> Saving...`;
+            errorContainer.classList.add("hidden");
 
-        // Example logic to revert UI after save
-        if (!isGlobal) {
-            editArea.classList.add("hidden");
-            displayArea?.classList.remove("hidden");
-            recordBtn?.classList.remove("hidden");
+            // Disable all inputs in the form
+            const allInputs = editArea.querySelectorAll("input");
+            allInputs.forEach(input => input.disabled = true);
+
+            console.log(`[SAVING] ${item.name || item.vital_sign}:`, submissionData);
+
+            // Call createObservation
+            const response = await createObservation(submissionData);
+            debug("createObservation response received");
+
+            let newResource = null;
+
+            // 1. Try to get resource from body (some servers return it on POST)
+            if (response && response.body && response.body.resourceType === "Observation") {
+                debug("New resource found in response body");
+                newResource = response.body;
+            }
+            // 2. Fallback to Location header
+            else if (response && response.headers) {
+                // Handle different header implementations (Headers object or plain object)
+                let location = null;
+                if (typeof response.headers.get === 'function') {
+                    location = response.headers.get("Location") || response.headers.get("location");
+                } else {
+                    location = response.headers["Location"] || response.headers["location"];
+                }
+
+                if (location) {
+                    debug("Fetching new Observation from Location: " + location);
+                    try {
+                        newResource = await client_session.request(location);
+                    } catch (fetchErr) {
+                        console.error("Failed to fetch new resource from Location:", fetchErr);
+                    }
+                } else {
+                    debug("No Location header or resource body found in response");
+                }
+            }
+
+            // 3. Update UI if we have a resource
+            if (newResource) {
+                debug("Processing new resource for UI update...");
+                const detail = await extractObservationDetailsNew(newResource);
+                await addNewVitalToList(detail);
+                debug("UI update completed");
+            } else {
+                debug("Proceeding without UI list update (no resource obtained)");
+            }
+
+            // Cleanup form
+            if (isGlobal) {
+                cardLi.remove();
+            } else {
+                editArea.classList.add("hidden");
+                displayArea?.classList.remove("hidden");
+                recordBtn?.classList.remove("hidden");
+            }
+
+        } catch (error) {
+            console.error("Save failed:", error);
+            saveBtn.disabled = false;
+            cancelBtn.disabled = false;
+            saveBtn.textContent = originalBtnText;
+
+            // Re-enable inputs
+            const allInputs = editArea.querySelectorAll("input");
+            allInputs.forEach(input => input.disabled = false);
+
+            // Show Error Inline
+            errorContainer.textContent = "Error: " + (error.message || "Failed to save observation. Please try again.");
+            errorContainer.classList.remove("hidden");
         }
     });
 
@@ -2165,7 +2455,7 @@ async function handleGlobalRecordClick() {
 
 function buildObservationFromSubmission(submissionData) {
 
-    const { main_loinc_code, obs_display_name, obs_timestamp, values } = submissionData;
+    const { main_loinc_code, obs_display_name, obs_timestamp, notes, values } = submissionData;
 
     //const loincCode = selectedVital ? selectedVital.code : "44484-3"; // Default to "Other" if not found
 
@@ -2199,14 +2489,21 @@ function buildObservationFromSubmission(submissionData) {
         },
         "effectiveDateTime": obs_timestamp,
         "issued": new Date().toISOString(),
-        "note": [
-            {
-                "text": "captured via EHR Launch"
-            }
-        ]
+        "note": [],
+        "encounter": {
+            "reference": `Encounter/${global_dict_pii.encounterId}`,
+        }
     };
 
+    //     "note": [
+    //     {
+    //         "text": "captured via EHR Launch"
+    //     }
+    // ]
+
     let observation = observation_base;
+
+    const selectedVital = endpointConfig.vitals_loinc_codes.find(v => v.loinc_code === main_loinc_code);
 
     if (values.length == 1) {
 
@@ -2215,6 +2512,14 @@ function buildObservationFromSubmission(submissionData) {
             "unit": values[0].uom,
             "system": "http://unitsofmeasure.org",
             "code": values[0].uom
+        }
+
+        if (selectedVital.additional_loinc_codes) {
+            // selectedVital.additional_loinc_codes.forEach(code => {
+            //     observation.code.coding.push(code);
+            // });
+            // observation.code.coding = [...selectedVital.additional_loinc_codes, ...observation.code.coding];
+            observation.code.coding = selectedVital.additional_loinc_codes;
         }
 
     } else {
@@ -2246,43 +2551,43 @@ function buildObservationFromSubmission(submissionData) {
 
     }
 
+    if (!isNullOrEmpty(notes)) {
+        observation.note.push({
+            text: notes
+        });
+    }
+
+
     return observation;
 }
 
 async function createObservation(submissionData) {
     try {
         debug("entering createObservation...");
-
         const observation = buildObservationFromSubmission(submissionData);
+        debug("Observation payload built: " + JSON.stringify(observation));
 
-        await client_session.request({
+        const response = await client_session.request({
             url: "Observation",
             method: "POST",
             body: JSON.stringify(observation),
             headers: {
                 "Content-Type": "application/fhir+json"
-            }
-        })
-            .then(response => {
-                debug("Observation created successfully:", JSON.stringify(response));
-                return response;
-            })
-            .catch(error => {
-                debug("createObservation failed...");
-                debug(error);
-                return null;
-            }).finally(() => {
-                debug("exiting createObservation!");
-            });
+            },
+            includeResponse: true
+        });
+
+        debug("Observation created successfully. Status: " + response.status);
+        return response;
+
     } catch (error) {
         debug("createObservation failed...");
         debug(error);
-        return null;
+        throw error; // Let the caller handle display
     } finally {
         debug("exiting createObservation!");
     }
 }
-
 
 async function summarizeOld(patientInfo) {
     if (typeof window.ai === 'undefined' || !window.ai.summarizer) {

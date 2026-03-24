@@ -10,7 +10,90 @@
       "patient_client_id": "56feba67-549f-4364-93b2-1cd0ab387b5b",
       "provider_client_id": "5f037261-0fe3-4ce2-945e-562f1bf226ce",
       "patient_scopes": "launch/patient openid profile offline_access patient/Patient.read patient/MedicationRequest.read patient/Observation.read",
-      "provider_scopes": "launch openid profile patient/Patient.read patient/MedicationRequest.read patient/MedicationRequest.search patient/Observation.read patient/Observation.write patient/Encounter.read user/Practitioner.read"
+      "provider_scopes": "launch openid profile patient/Patient.read patient/MedicationRequest.read patient/MedicationRequest.search patient/Observation.read patient/Observation.write patient/Encounter.read user/Practitioner.read",
+      "vitals_loinc_codes": [
+        {
+          "entry_type": "quantity",
+          "vital_sign": "Heart Rate",
+          "loinc_code": "69000-8",
+          "uom": [
+            "{beats}/min"
+          ]
+        },
+        {
+          "entry_type": "quantity",
+          "vital_sign": "Body temperature",
+          "loinc_code": "8310-5",
+          "uom": [
+            "Cel"
+          ],
+          "additional_loinc_codes": [
+            {
+              "system": "urn:oid:1.2.840.114350.1.13.5325.1.7.2.707679",
+              "code": "6",
+              "display": "Temp"
+            },
+            {
+              "system": "http://loinc.org",
+              "code": "8310-5",
+              "display": "Body temperature"
+            },
+            {
+              "system": "http://loinc.org",
+              "code": "8716-3",
+              "display": "Vital signs"
+            }
+          ]
+        },
+        {
+          "entry_type": "codeableconcept",
+          "vital_sign": "Blood Pressure",
+          "loinc_code": "85354-9",
+          "components": [
+            {
+              "entry_type": "quantity",
+              "vital_sign": "Systolic Blood Pressure",
+              "loinc_code": "8480-6",
+              "uom": [
+                "mm[Hg]"
+              ]
+            },
+            {
+              "entry_type": "quantity",
+              "vital_sign": "Diastolic Blood Pressure",
+              "loinc_code": "8462-4",
+              "uom": [
+                "mm[Hg]"
+              ]
+            }
+          ]
+        },
+        {
+          "entry_type": "quantity",
+          "vital_sign": "Body Weight (Measured)",
+          "loinc_code": "3141-9",
+          "uom": [
+            "kg",
+            "[lb_av]"
+          ]
+        },
+        {
+          "entry_type": "quantity",
+          "vital_sign": "Body Height (Measured)",
+          "loinc_code": "8302-2",
+          "uom": [
+            "cm"
+          ]
+        },
+        {
+          "entry_type": "quantity",
+          "vital_sign": "Body Mass Index (BMI)",
+          "loinc_code": "39156-5",
+          "uom": [
+            "kg/m2"
+          ]
+        }
+      ]
     },
     "cerner": {
       "name": "Cerner Sandbox",
